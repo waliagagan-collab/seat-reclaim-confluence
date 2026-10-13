@@ -264,6 +264,30 @@ define('setProtected', async ({ payload, context }) => {
 
 // --- reclaim and undo -------------------------------------------------------------
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const CONFIRM_DELAYS_MS = [0, 1500, 2500];
+
+/**
+ * Confluence's own answer after a group change: can the account still use the
+ * site? Its permission data can lag the directory by a second or two right
+ * after the change, so a first "still has access" is asked again before it is
+ * reported. true = seat confirmed free, false = still has access, null = unknown.
+ */
+async function confirmSeatFreed(accountId) {
+  let answer = null;
+  for (const ms of CONFIRM_DELAYS_MS) {
+    if (ms) await sleep(ms);
+    try {
+      const stillUse = await canUseConfluence(accountId, { asUser: true });
+      answer = stillUse === null ? null : !stillUse;
+    } catch {
+      answer = null;
+    }
+    if (answer === true) return true;
+  }
+  return answer;
+}
+
 /**
  * Reclaim seats for up to RECLAIM_BATCH accounts. For each one: check they are
  * still inactive, read their groups live, plan again against a live group map
@@ -289,6 +313,7 @@ define('reclaim', async ({ payload, context }) => {
   const days = normaliseDays(meta?.days);
   const me = context?.accountId;
   const results = [];
+  const pending = []; // group changes that still need Confluence's answer
 
   for (const accountId of ids) {
     const at = new Date().toISOString();
@@ -315,19 +340,11 @@ define('reclaim', async ({ payload, context }) => {
       const changes = await removeFromGroups(accountId, plan.remove);
       const okCount = changes.filter((c) => c.ok).length;
 
-      // Confluence's own answer: can the account still use the site?
-      // true = seat confirmed free, false = still has access, null = unknown.
-      let seatFreed = null;
-      if (okCount) {
-        try {
-          const stillUse = await canUseConfluence(accountId, { asUser: true });
-          seatFreed = stillUse === null ? null : !stillUse;
-        } catch {
-          seatFreed = null;
-        }
-      }
+      // Confluence's own answer (seatFreed) is asked after the batch, once its
+      // permission data has had a moment to catch up; until then it is unknown.
+      const seatFreed = null;
       const left = new Set(changes.filter((c) => c.ok).map((c) => c.groupId));
-      const remainingGroups = seatFreed === false ? userGroups.filter((g) => !left.has(g.id)).map((g) => g.name) : [];
+      const remainingGroups = [];
 
       const entry = {
         id: newEntryId(),
@@ -343,7 +360,10 @@ define('reclaim', async ({ payload, context }) => {
         seatFreed,
         days: meta?.days ?? null,
       };
-      if (okCount) await saveEntry(entry); // nothing changed, nothing to undo
+      if (okCount) {
+        await saveEntry(entry); // nothing changed, nothing to undo
+        pending.push({ entry, index: results.length, userGroups, left });
+      }
       results.push({
         accountId,
         ok: okCount === changes.length,
@@ -358,6 +378,19 @@ define('reclaim', async ({ payload, context }) => {
       results.push({ accountId, ok: false, error: String(err?.message ?? err) });
     }
   }
+
+  // Everyone whose groups changed is confirmed together, so one slow answer
+  // does not hold up the others, and the log entry is updated with the answer.
+  await Promise.all(
+    pending.map(async ({ entry, index, userGroups, left }) => {
+      const seatFreed = await confirmSeatFreed(entry.accountId);
+      entry.seatFreed = seatFreed;
+      await saveEntry(entry);
+      results[index].seatFreed = seatFreed;
+      results[index].remainingGroups =
+        seatFreed === false ? userGroups.filter((g) => !left.has(g.id)).map((g) => g.name) : [];
+    }),
+  );
 
   const people = await fetchProfiles(ids);
   return {
