@@ -1,7 +1,7 @@
 # Marketplace listing — Seat Reclaim for Confluence
 
 Copy for the Atlassian Marketplace listing, checked against the field limits.
-Assets: logo in `assets/` (reuse the Seat Reclaim logo set); highlights to capture after the live test.
+Assets: logo-144/512/1024 and banner-1120x548 in `assets/` (build_assets.py); highlights captured 2026-10-13 in `assets/2026-10-13/` (highlight-1-result, highlight-2-confirm, highlight-3-history, 1840x900); stage-1800x886 is the website image.
 
 ---
 
