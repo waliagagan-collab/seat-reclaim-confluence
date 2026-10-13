@@ -9,6 +9,7 @@ import {
   explainChange,
   isIdpManaged,
   alreadyMember,
+  freedProductsFrom,
 } from '../src/lib/reclaim.js';
 import { buildGroupsMeta, guessAccessGroups, normaliseGroup, seatHeldInSearch } from '../src/lib/confluence.js';
 
@@ -152,7 +153,27 @@ test('undo treats "already a member" as restored', () => {
   assert.equal(alreadyMember(400, { message: 'User is already a member of the group' }), true);
   assert.equal(alreadyMember(409, { message: 'Membership already exists' }), true);
   assert.equal(alreadyMember(400, { message: 'Something else' }), false);
+  // "does not exist" must not count as restored: nothing was re-added.
+  assert.equal(alreadyMember(400, { message: 'User or group does not exist' }), false);
   assert.equal(alreadyMember(500, null), false);
+});
+
+test('only groups that were actually left count as freed products', () => {
+  const changes = [
+    { groupId: 'g1', name: 'confluence-users', products: ['Confluence'], ok: true },
+    { groupId: 'g2', name: 'extra', products: ['Confluence'], ok: false, error: 'refused' },
+  ];
+  assert.deepEqual(freedProductsFrom(changes), ['Confluence']);
+  assert.deepEqual(freedProductsFrom(changes.map((c) => ({ ...c, ok: false }))), []);
+  assert.deepEqual(freedProductsFrom(changes, [{ product: 'Confluence', via: 'org-admins' }]), []);
+  assert.deepEqual(freedProductsFrom(undefined), []);
+});
+
+test('when groups are recognised by name only, an unrecognised group is explained as such', () => {
+  const plan = planReclaim({ userGroupIds: ['custom-group'], groupsMeta: META });
+  assert.match(reasonText(plan), /already be free/);
+  assert.match(reasonText(plan, { accessSource: 'names' }), /recognised by name/);
+  assert.match(reasonText(plan, { accessSource: 'permissions' }), /already be free/);
 });
 
 test('after a reclaim, the seat counts as free only when the site directory no longer grants "use"', () => {

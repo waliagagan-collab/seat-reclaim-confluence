@@ -14,7 +14,7 @@ Confluence has no application-role API, but its group list can be filtered by th
 permission a group holds: `GET /wiki/rest/api/group?accessType=user|admin|site-admin`.
 Members of any of those groups hold a seat. The app reads that list as the admin at scan
 time and again at reclaim time, removes the user from the non-admin groups, and then asks
-Confluence (`GET /wiki/rest/api/user?accountId=…&expand=operations`) whether the account can
+- After each reclaim the app asks the site's user directory (`GET /wiki/rest/api/search/user?cql=type=user and user.accountid=...&expand=operations`, retried for a few seconds) whether the account still holds a seat, because `/wiki/rest/api/user?expand=operations` keeps reporting access after it is gone.
 still use the site, so it reports what Confluence says rather than what it hoped.
 
 | Rule | Where |

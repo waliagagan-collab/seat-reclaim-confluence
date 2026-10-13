@@ -31,14 +31,14 @@ const queue = new Queue({ key: 'scan-queue' });
 const SLICE = {
   contentPages: 12,
   verifyUsers: 30,
-  softBudgetMs: 38_000, // stop early; the manifest gives the function 60s
+  softBudgetMs: 25_000, // stop early; one user can cost ~100 calls, and the manifest gives the function 60s
 };
 const CONTENT_PAGE = 50;
 const MAX_CONTENT_PAGES = 400; // sweep ceiling; verify makes a partial sweep harmless
 const MAX_TRANSIENT_RETRIES = 6;
 
 export const SWEEP_TRUNCATED_WARNING =
-  `This site had more than ${MAX_CONTENT_PAGES * CONTENT_PAGE} pages, posts, comments or files modified in the window, so the activity sweep stopped at the most recent ${MAX_CONTENT_PAGES * CONTENT_PAGE}. Every remaining user was still verified individually against all content on the site, so the list is unaffected — the scan just took longer.`;
+  `This site had more than ${MAX_CONTENT_PAGES * CONTENT_PAGE} pages, posts, comments or files modified in the window, so the activity sweep stopped at the most recent ${MAX_CONTENT_PAGES * CONTENT_PAGE}. Every remaining user was still verified individually against all content the app can see, so the list is unaffected — the scan just took longer.`;
 
 export const unverifiedWarning = (n) =>
   `${n} ${n === 1 ? 'user contributes' : 'users contribute'} to more content than the check can examine, so ${n === 1 ? 'that user was' : 'they were'} counted as active rather than risk a wrong name on the list.`;
@@ -57,6 +57,10 @@ export async function handler(event) {
   if (!state || state.status !== 'running' || state.run !== body.run) {
     return; // superseded or cancelled: drop the event, do not re-queue
   }
+  // Events are delivered at least once, and two open tabs can both push the
+  // first one. Every commit bumps `seq` and sends it with the next event, so
+  // a duplicate or late copy is dropped instead of running the slice twice.
+  if ((body.seq ?? 0) !== (state.seq ?? 0)) return;
 
   try {
     let live;
@@ -81,6 +85,8 @@ export async function handler(event) {
     return undefined;
   } catch (err) {
     if (err.rateLimited) {
+      // Progress made before the limit hit was committed by the slice (same
+      // seq, no re-queue), so the retried event resumes from there.
       return new InvocationError({
         retryAfter: err.retryAfter,
         retryReason: InvocationErrorCode.FUNCTION_UPSTREAM_RATE_LIMITED,
@@ -107,11 +113,28 @@ export async function handler(event) {
  */
 async function commit(state, patch, { requeue = true } = {}) {
   const fresh = await getScanState();
-  if (!fresh || fresh.run !== state.run || fresh.status !== 'running') return false;
-  const next = { ...fresh, ...patch };
+  if (!fresh || fresh.run !== state.run || fresh.status !== 'running') {
+    // This slice's scratch writes belong to a run nobody will finish.
+    await clearRun(state.run);
+    return false;
+  }
+  // The seq only moves when a new event is sent; a pause (rate limit) keeps
+  // it, so the platform's retry of the same event is still accepted.
+  const seq = requeue ? (fresh.seq ?? 0) + 1 : (fresh.seq ?? 0);
+  const next = { ...fresh, ...patch, seq };
   await setScanState(next);
-  if (requeue) await queue.push({ body: { run: state.run } });
+  if (requeue) await queue.push({ body: { run: state.run, seq } });
   return true;
+}
+
+/**
+ * A rate limit mid-slice: save what the slice collected so far, commit the
+ * cursor without re-queueing, then rethrow so the handler asks the platform
+ * to retry after Retry-After. The retry resumes from the committed cursor.
+ */
+async function pause(state, patch, err) {
+  await commit(state, patch, { requeue: false });
+  throw err;
 }
 
 async function fail(state, error) {
@@ -138,8 +161,18 @@ async function doContent(state) {
   let truncated = false;
   const active = new Set();
 
+  let paused = null;
   for (let i = 0; i < SLICE.contentPages && !overBudget(t0); i++) {
-    const page = await fetchContentPage(state.days, cursor, CONTENT_PAGE);
+    let page;
+    try {
+      page = await fetchContentPage(state.days, cursor, CONTENT_PAGE);
+    } catch (err) {
+      if (err.rateLimited) {
+        paused = err;
+        break;
+      }
+      throw err;
+    }
     for (const id of Object.keys(page.activity)) active.add(id);
     scanned += page.count;
     pages += 1;
@@ -158,14 +191,16 @@ async function doContent(state) {
 
   if (active.size) await markActive(state.run, [...active]);
 
-  return commit(state, {
+  const patch = {
     contentCursor: cursor,
     contentPages: pages,
     itemsScanned: scanned,
     sweepTruncated: Boolean(state.sweepTruncated) || truncated,
     phase: done ? 'verify' : 'content',
     ...(done ? { verifyShard: 0, verifyIndex: 0, verified: 0, dormantFound: 0, unverified: 0 } : {}),
-  });
+  };
+  if (paused) return pause(state, patch, paused);
+  return commit(state, patch);
 }
 
 // --- verify -----------------------------------------------------------------
@@ -187,8 +222,9 @@ async function doVerify(state) {
   let unverified = state.unverified ?? 0;
   let groupsUnreadable = Boolean(state.groupsUnreadable);
   let checked = 0;
+  let paused = null;
 
-  while (shard < SHARDS && checked < SLICE.verifyUsers && !overBudget(t0)) {
+  while (shard < SHARDS && checked < SLICE.verifyUsers && !overBudget(t0) && !paused) {
     const users = await getShardUsers(state.run, shard);
     const activeSet = await getShardActive(state.run, shard);
     const ids = Object.keys(users).sort();
@@ -196,10 +232,28 @@ async function doVerify(state) {
 
     while (index < ids.length && checked < SLICE.verifyUsers && !overBudget(t0)) {
       const accountId = ids[index];
-      index += 1;
-      if (activeSet[accountId]) continue; // sweep already proved them active
+      if (activeSet[accountId]) {
+        index += 1;
+        continue; // sweep already proved them active
+      }
 
-      const result = await verifyCandidate(accountId, state.days);
+      let result;
+      try {
+        result = await verifyCandidate(accountId, state.days);
+      } catch (err) {
+        if (err.rateLimited) {
+          paused = err; // this user is re-verified when the slice resumes
+          break;
+        }
+        if (err.status === 400) {
+          // Confluence rejects the account (removed since the listing, or an
+          // unusual id). Counted as unverified: never listed as inactive.
+          result = { active: true, unverified: true };
+        } else {
+          throw err;
+        }
+      }
+      index += 1;
       checked += 1;
       verified += 1;
       if (result.unverified) unverified += 1;
@@ -235,8 +289,8 @@ async function doVerify(state) {
     }
   }
 
-  const done = shard >= SHARDS;
-  return commit(state, {
+  const done = shard >= SHARDS && !paused;
+  const patch = {
     verifyShard: shard,
     verifyIndex: index,
     verified,
@@ -244,7 +298,9 @@ async function doVerify(state) {
     unverified,
     groupsUnreadable,
     phase: done ? 'finalize' : 'verify',
-  });
+  };
+  if (paused) return pause(state, patch, paused);
+  return commit(state, patch);
 }
 
 // --- finalize ---------------------------------------------------------------

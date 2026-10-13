@@ -30,7 +30,7 @@ import { adminOnly } from './lib/admin.js';
 import { normaliseDays, isStale, licenseGate, licenseMessage } from './lib/scan.js';
 import { normaliseSeatCosts } from './lib/ui.js';
 import { decorate, protectedReasonFor } from './lib/decorate.js';
-import { planReclaim, reasonText, fetchUserGroupsLive, removeFromGroups, addToGroups } from './lib/reclaim.js';
+import { planReclaim, reasonText, fetchUserGroupsLive, removeFromGroups, addToGroups, freedProductsFrom } from './lib/reclaim.js';
 
 // Forge bundles this ESM file with webpack, and the CommonJS `@forge/resolver`
 // arrives as a namespace object rather than the class. Take the default when
@@ -47,7 +47,7 @@ const queue = new Queue({ key: 'scan-queue' });
 const EXPORT_LIMIT = 5000;
 // A resolver call has a hard time limit, so reclaim runs in small batches and
 // the page loops. Each user costs a few reads plus one call per group.
-export const RECLAIM_BATCH = 5;
+export const RECLAIM_BATCH = 3; // small, so a batch always finishes inside the resolver's time limit
 
 export const ACCESS_GROUPS_BY_NAME_WARNING =
   "Confluence didn't let the app filter groups by permission, so the standard access groups were recognised by name. If your site grants Confluence through other groups, those users will show as can't reclaim.";
@@ -159,12 +159,14 @@ define('listUsers', async ({ payload }) => {
     }
     if (collected.length) await upsertUsers(state.run, collected);
   } catch (err) {
+    // Rate limited: keep what was collected so far and let the page wait.
+    if (err?.rateLimited) return { ok: true, done: false, retryAfter: err.retryAfter ?? 5 };
     const fresh = await getScanState();
     if (fresh?.run === state.run) {
-      await setScanState({ ...fresh, status: 'failed', error: String(err?.message ?? err), finishedAt: new Date().toISOString() });
+      await setScanState({ ...fresh, status: 'failed', error: String(err?.message ?? err).slice(0, 300), finishedAt: new Date().toISOString() });
       await clearRun(state.run);
     }
-    return { ok: false, done: true, error: String(err?.message ?? err) };
+    return { ok: false, done: true, error: String(err?.message ?? err).slice(0, 300) };
   }
 
   // Re-read before committing: a cancel that landed meanwhile must win.
@@ -187,7 +189,7 @@ define('listUsers', async ({ payload }) => {
     // left saying "running" — that showed an admin a spinner for 20 minutes
     // with no work happening behind it.
     try {
-      await queue.push({ body: { run: state.run } });
+      await queue.push({ body: { run: state.run, seq: next.seq ?? 0 } });
     } catch (err) {
       await setScanState({
         ...next,
@@ -337,15 +339,9 @@ define('reclaim', async ({ payload, context }) => {
         results.push({ accountId, ok: false, skipped: true, error: reasonText(plan) });
         continue;
       }
-      const changes = await removeFromGroups(accountId, plan.remove);
-      const okCount = changes.filter((c) => c.ok).length;
-
-      // Confluence's own answer (seatFreed) is asked after the batch, once its
-      // permission data has had a moment to catch up; until then it is unknown.
-      const seatFreed = null;
-      const left = new Set(changes.filter((c) => c.ok).map((c) => c.groupId));
-      const remainingGroups = [];
-
+      // The log entry is written BEFORE anything changes, as "pending", so a
+      // timeout or dropped connection mid-way can never leave a removed group
+      // with no record and no undo. It is updated once Confluence has answered.
       const entry = {
         id: newEntryId(),
         type: 'reclaim',
@@ -353,26 +349,46 @@ define('reclaim', async ({ payload, context }) => {
         by: me ?? null,
         at,
         updatedAt: at,
-        status: okCount === changes.length ? 'reclaimed' : okCount ? 'partial' : 'failed',
-        freedProducts: plan.freedProducts,
+        status: 'pending',
+        freedProducts: [],
         keptProducts: plan.keptProducts,
-        groups: changes,
-        seatFreed,
+        groups: plan.remove.map((g) => ({ groupId: g.groupId, name: g.name, products: g.products, ok: false, pending: true })),
+        seatFreed: null,
         days: meta?.days ?? null,
       };
-      if (okCount) {
-        await saveEntry(entry); // nothing changed, nothing to undo
-        pending.push({ entry, index: results.length, userGroups, left });
+      await saveEntry(entry);
+
+      const changes = await removeFromGroups(accountId, plan.remove);
+      const okCount = changes.filter((c) => c.ok).length;
+      const unknownCount = changes.filter((c) => c.unknown).length;
+      const left = new Set(changes.filter((c) => c.ok).map((c) => c.groupId));
+
+      entry.groups = changes;
+      entry.freedProducts = freedProductsFrom(changes, plan.keptProducts);
+      entry.updatedAt = new Date().toISOString();
+      entry.status = okCount === changes.length ? 'reclaimed' : okCount || unknownCount ? 'partial' : 'failed';
+      // Confluence's own answer (seatFreed) is asked after the batch, once its
+      // permission data has had a moment to catch up; until then it is unknown.
+      let logged = true;
+      try {
+        await saveEntry(entry);
+      } catch {
+        logged = false;
       }
+      if (okCount) pending.push({ entry, index: results.length, userGroups, left, groupsMeta });
+      const failedChange = changes.find((c) => !c.ok);
       results.push({
         accountId,
         ok: okCount === changes.length,
-        entryId: okCount ? entry.id : null,
-        freedProducts: plan.freedProducts,
+        partial: okCount > 0 && okCount < changes.length,
+        entryId: entry.id,
+        freedProducts: entry.freedProducts,
         groupsLeft: changes.filter((c) => c.ok).map((c) => c.name),
-        seatFreed,
-        remainingGroups,
-        error: changes.find((c) => !c.ok)?.error ?? null,
+        seatFreed: null,
+        remainingGroups: [],
+        error: !logged
+          ? 'The groups were left, but the change could not be written to History. Check the person\'s groups in Atlassian Administration.'
+          : (failedChange?.error ?? null),
       });
     } catch (err) {
       results.push({ accountId, ok: false, error: String(err?.message ?? err) });
@@ -382,13 +398,20 @@ define('reclaim', async ({ payload, context }) => {
   // Everyone whose groups changed is confirmed together, so one slow answer
   // does not hold up the others, and the log entry is updated with the answer.
   await Promise.all(
-    pending.map(async ({ entry, index, userGroups, left }) => {
+    pending.map(async ({ entry, index, userGroups, left, groupsMeta: gm }) => {
       const seatFreed = await confirmSeatFreed(entry.accountId);
       entry.seatFreed = seatFreed;
-      await saveEntry(entry);
+      entry.updatedAt = new Date().toISOString();
+      try {
+        await saveEntry(entry);
+      } catch {
+        /* the answer is still returned to the page; History re-asks later */
+      }
       results[index].seatFreed = seatFreed;
+      // Only groups that grant Confluence explain continued access; the rest
+      // (space groups, team groups) would be noise.
       results[index].remainingGroups =
-        seatFreed === false ? userGroups.filter((g) => !left.has(g.id)).map((g) => g.name) : [];
+        seatFreed === false ? userGroups.filter((g) => !left.has(g.id) && gm?.[g.id]).map((g) => g.name) : [];
     }),
   );
 
@@ -399,13 +422,19 @@ define('reclaim', async ({ payload, context }) => {
   };
 });
 
-/** Put a user back in exactly the groups one reclaim removed. */
+/**
+ * Put a user back in exactly the groups one reclaim removed. Deliberately not
+ * behind the licence gate: a site whose subscription lapsed must still be able
+ * to give people their access back.
+ */
 define('undo', async ({ payload, context }) => {
   const entry = await getEntry(String(payload?.entryId ?? ''));
   if (!entry || entry.type !== 'reclaim') return { ok: false, error: 'That action was not found.' };
   if (entry.status === 'restored') return { ok: true, already: true };
 
-  const removed = (entry.groups ?? []).filter((g) => g.ok);
+  // Groups that were left, plus any whose removal got no answer or was
+  // interrupted: adding someone who is still a member is harmless.
+  const removed = (entry.groups ?? []).filter((g) => g.ok || g.unknown || g.pending);
   const changes = await addToGroups(entry.accountId, removed);
   const allBack = changes.every((c) => c.ok);
   const at = new Date().toISOString();
@@ -421,9 +450,36 @@ define('undo', async ({ payload, context }) => {
   return { ok: allBack, error: allBack ? null : updated.restoreErrors.join(' ') };
 });
 
+const RECHECK_WINDOW_MS = 15 * 60 * 1000;
+const RECHECK_MAX = 5;
+
+/**
+ * Confluence's directory can lag a group change by more than the few seconds
+ * the reclaim waits. Recent entries still marked "not free" or "unknown" are
+ * asked again when History is opened, so a slow answer never sticks for good.
+ */
+async function recheckRecent(entries) {
+  const due = entries
+    .filter((e) => e.type === 'reclaim' && (e.status === 'reclaimed' || e.status === 'partial') && e.seatFreed !== true)
+    .filter((e) => Date.now() - Date.parse(e.updatedAt ?? e.at) < RECHECK_WINDOW_MS)
+    .slice(0, RECHECK_MAX);
+  for (const e of due) {
+    try {
+      const stillUse = await canUseConfluence(e.accountId, { asUser: true });
+      if (stillUse === null) continue;
+      e.seatFreed = !stillUse;
+      e.updatedAt = new Date().toISOString();
+      await saveEntry(e);
+    } catch {
+      /* answer later */
+    }
+  }
+}
+
 define('getHistory', async ({ payload }) => {
   const page = Math.max(0, Number(payload?.page) || 0);
   const { entries, total, pages } = await getLogPage(page);
+  await recheckRecent(entries);
   const people = await fetchProfiles(entries.flatMap((e) => [e.accountId, e.by, e.restoredBy]));
   const name = (id) => (id ? (people[id]?.displayName ?? '(unknown)') : null);
   return {

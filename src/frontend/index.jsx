@@ -39,7 +39,7 @@ const REVIEW_URL = 'https://marketplace.atlassian.com/search?query=Seat%20Reclai
 const PRODUCT = 'Confluence';
 
 // Must match RECLAIM_BATCH in src/index.js; the backend caps it anyway.
-const BATCH = 5;
+const BATCH = 3; // matches RECLAIM_BATCH in the resolver
 
 const PERIODS = [30, 60, 90, 180, 365].map((d) => ({
   label: `No contribution in ${d} days`,
@@ -89,11 +89,13 @@ const phaseText = (s) => {
 const fmtDate = (iso) => (iso ? new Date(iso).toISOString().slice(0, 10) : '—');
 const fmtTime = (iso) => (iso ? new Date(iso).toISOString().slice(0, 16).replace('T', ' ') : '—');
 const join = (xs) => (xs ?? []).join(', ') || '—';
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Status shown for a row: what happened last, or whether it can be reclaimed. */
 function rowStatus(u) {
   const last = u.lastAction?.status;
   if (last === 'reclaimed') return { text: 'Reclaimed', appearance: 'success' };
+  if (last === 'pending') return { text: 'Interrupted', appearance: 'moved' };
   if (last === 'partial') return { text: 'Partly reclaimed', appearance: 'moved' };
   if (u.isProtected) return { text: 'Protected', appearance: 'default' };
   if (!u.reclaimable) return { text: 'Can’t reclaim', appearance: 'default' };
@@ -101,7 +103,9 @@ function rowStatus(u) {
 }
 
 // A partly reclaimed user still has groups to leave, so they stay selectable.
-const canSelect = (u) => u.reclaimable && !u.isProtected && u.lastAction?.status !== 'reclaimed';
+// An interrupted reclaim (no answer from Confluence) is sorted out from History first.
+const canSelect = (u) =>
+  u.reclaimable && !u.isProtected && u.lastAction?.status !== 'reclaimed' && u.lastAction?.status !== 'pending';
 
 // ---------------------------------------------------------------------------
 // Inactive users tab
@@ -135,7 +139,7 @@ const HowItWorks = ({ compact, onToggle }) =>
       <Stack space="space.100">
         <Text>
           Run a scan to find licensed users who <Strong>created or edited nothing in Confluence</Strong> in the period:
-          no page, blog post, comment or file. Every candidate is checked against all content on the site. Confluence
+          no page, blog post, comment or file. Every candidate is checked against all content the app can see. Confluence
           does not record who <Strong>views</Strong> a page, so someone who only reads will appear here; if in doubt,
           check their last-active date in Atlassian Administration. Then pick who to reclaim. The app takes them out
           of the groups that grant Confluence, which frees the seat, and asks Confluence to confirm. Admins and you
@@ -289,6 +293,8 @@ function AuditPanel({ gate, onChanged, version }) {
           return;
         }
         if (res.done) return;
+        // Confluence asked for a pause; the listing carries on afterwards.
+        if (res.retryAfter) await sleep(Math.min(60, Number(res.retryAfter) || 5) * 1000);
       }
     },
     [refresh]
@@ -298,7 +304,7 @@ function AuditPanel({ gate, onChanged, version }) {
   const resumeRun = running && !stale && state?.phase === 'directory' && !busy ? state.run : null;
   useEffect(() => {
     if (!resumeRun) return;
-    listUsers(resumeRun).catch(() => {});
+    listUsers(resumeRun).catch(() => setMessage('Listing the users stopped. Reload the page to carry on.'));
   }, [resumeRun, listUsers]);
 
   // Every invoke can reject — the network, a cold start, a backend fault. If we
@@ -398,9 +404,15 @@ function AuditPanel({ gate, onChanged, version }) {
         } else {
           results.push(...(res.results ?? []));
         }
-      } catch (err) {
+      } catch {
+        // No answer: the groups may well have been left. History is the truth.
         results.push(
-          ...ids.slice(i, i + BATCH).map((accountId) => ({ accountId, ok: false, error: err?.message ?? 'No response' }))
+          ...ids.slice(i, i + BATCH).map((accountId) => ({
+            accountId,
+            ok: false,
+            unknown: true,
+            error: 'No reply from Confluence. The change may have gone through; check the History tab before trying again.',
+          }))
         );
       }
     }
@@ -562,9 +574,11 @@ function AuditPanel({ gate, onChanged, version }) {
               Save price
             </Button>
             <Text>
-              {saving !== null
-                ? `${fmtMoney(saving)} a year across the ${report.dormantCount} inactive ${report.dormantCount === 1 ? 'seat' : 'seats'}. Saved for this site.`
-                : 'Use what one seat costs you per year, in your billing currency. It is saved for this site.'}
+              {price && liveCost === null
+                ? 'Enter a number, for example 70.'
+                : saving !== null
+                  ? `${fmtMoney(saving)} a year across the ${report.dormantCount} inactive ${report.dormantCount === 1 ? 'seat' : 'seats'}. Saved for this site.`
+                  : 'Use what one seat costs you per year, in your billing currency. It is saved for this site.'}
             </Text>
           </Inline>
 
@@ -803,15 +817,17 @@ function AuditPanel({ gate, onChanged, version }) {
 function Outcome({ outcome }) {
   const { results, before, after } = outcome;
   const done = results.filter((r) => r.ok);
-  const confirmed = done.filter((r) => r.seatFreed === true);
+  const partial = results.filter((r) => !r.ok && r.partial);
+  const unknown = results.filter((r) => !r.ok && r.unknown);
+  const confirmed = [...done, ...partial].filter((r) => r.seatFreed === true);
   const stillAccess = results.filter((r) => r.seatFreed === false);
   const skipped = results.filter((r) => !r.ok && r.skipped);
-  const failed = results.filter((r) => !r.ok && !r.skipped);
+  const failed = results.filter((r) => !r.ok && !r.skipped && !r.partial && !r.unknown);
   const countsKnown = Boolean(before?.exact && after?.exact);
 
   return (
     <SectionMessage
-      appearance={failed.length || stillAccess.length ? 'warning' : 'success'}
+      appearance={failed.length || stillAccess.length || partial.length || unknown.length ? 'warning' : 'success'}
       title={`Reclaimed seats for ${done.length} of ${results.length} ${results.length === 1 ? 'user' : 'users'}`}
     >
       <Stack space="space.100">
@@ -839,9 +855,19 @@ function Outcome({ outcome }) {
             Administration → Products → Confluence → Product access.
           </Text>
         ))}
+        {partial.map((r) => (
+          <Text key={r.accountId}>
+            Partly done for {r.displayName ?? r.accountId}: left {join(r.groupsLeft)}. {r.error}
+          </Text>
+        ))}
         {skipped.map((r) => (
           <Text key={r.accountId}>
             Skipped {r.displayName}: {r.error}
+          </Text>
+        ))}
+        {unknown.map((r) => (
+          <Text key={r.accountId}>
+            Result unknown for {r.displayName ?? r.accountId}: {r.error}
           </Text>
         ))}
         {failed.map((r) => (
@@ -862,6 +888,8 @@ function Outcome({ outcome }) {
 const STATUS = {
   reclaimed: { text: 'Reclaimed', appearance: 'success' },
   partial: { text: 'Partly reclaimed', appearance: 'moved' },
+  pending: { text: 'Interrupted', appearance: 'moved' },
+  failed: { text: 'Not done', appearance: 'removed' },
   restored: { text: 'Undone', appearance: 'default' },
 };
 
@@ -950,9 +978,14 @@ function HistoryPanel({ version, onChanged }) {
                   content: (
                     <Stack space="space.050">
                       <Lozenge appearance={st.appearance}>{st.text}</Lozenge>
+                      {e.status === 'pending' && (
+                        <Text size="small">
+                          Confluence did not answer before this stopped. Check the person's groups; Undo puts back every group that was planned.
+                        </Text>
+                      )}
                       {e.status !== 'restored' && e.seatFreed === true && <Text size="small">Confluence confirmed the seat is free</Text>}
                       {e.status !== 'restored' && e.seatFreed === false && (
-                        <Text size="small">Confluence still reported access afterwards</Text>
+                        <Text size="small">Confluence still reported access when last checked; it is asked again each time History opens</Text>
                       )}
                       {e.status === 'restored' && (
                         <Text size="small">

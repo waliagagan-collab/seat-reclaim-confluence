@@ -106,6 +106,9 @@ modules:
   function:
     - key: resolver
       handler: index.handler
+      # Resolvers cannot take a custom timeout (25s). Reclaim batches are kept
+      # small and every change is logged before it is made, so a timeout can
+      # never leave a group removal without a History entry.
     - key: agent-reclaim-summary
       handler: agent.getReclaimSummary
     - key: agent-reclaim-list

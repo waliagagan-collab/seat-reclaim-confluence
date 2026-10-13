@@ -11,7 +11,7 @@ import api, { route } from '@forge/api';
  */
 
 export const NOT_ADMIN_MESSAGE =
-  'Only Confluence administrators can use License Audit. Ask a site admin to open it.';
+  'Only Confluence administrators can use Seat Reclaim. Ask a site admin to open it.';
 export const CHECK_FAILED_MESSAGE =
   'Could not confirm that you are a Confluence administrator. Refresh the page and try again.';
 

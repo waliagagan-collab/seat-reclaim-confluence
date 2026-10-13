@@ -50,7 +50,7 @@ export function licenseMessage(gate, license) {
     return 'This test install is simulating an inactive licence.';
   }
   if (license?.trialEndDate && Date.parse(license.trialEndDate) < Date.now()) {
-    return 'Your free trial of License Audit has ended. Subscribe in Confluence → Settings → Manage apps to keep running audits.';
+    return 'Your free trial of Seat Reclaim has ended. Subscribe in Confluence → Settings → Manage apps to keep scanning and reclaiming.';
   }
-  return 'License Audit needs an active subscription. Start a free 30-day trial in Confluence → Settings → Manage apps.';
+  return 'Seat Reclaim needs an active subscription. Start a free 30-day trial in Confluence → Settings → Manage apps.';
 }

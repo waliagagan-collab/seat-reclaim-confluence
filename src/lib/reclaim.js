@@ -100,9 +100,12 @@ export function planReclaim({ userGroupIds, groupsMeta, protectedReason = null }
 }
 
 /** Pure: why a row can't be reclaimed (or what is still pending), in words an admin can act on. */
-export function reasonText(plan) {
+export function reasonText(plan, { accessSource = 'permissions' } = {}) {
   if (!plan) return null;
   if (plan.reclaimable && plan.reason !== 'groups-unknown') return null;
+  if (plan.reason === 'no-access-groups' && accessSource === 'names') {
+    return "Not in any of the standard groups that grant Confluence. This site's group permissions couldn't be read, so groups are recognised by name; if their access comes from a custom group, remove them from it in Atlassian Administration.";
+  }
   switch (plan.reason) {
     case 'self':
       return 'This is you. The app never removes the person running it.';
@@ -167,8 +170,17 @@ export function explainChange(status, body) {
  * Pure: a group-membership POST that says the user is already in the group
  * counts as restored.
  */
-export const alreadyMember = (status, body) =>
-  (status === 400 || status === 409) && /already|exist/i.test(errorText(body));
+export const alreadyMember = (status, body) => (status === 400 || status === 409) && /already/i.test(errorText(body));
+
+/** Pure: the products a set of group changes actually freed (only groups that were left count). */
+export function freedProductsFrom(changes, keptProducts = []) {
+  const kept = new Set((keptProducts ?? []).map((k) => k.product));
+  const freed = new Set((changes ?? []).filter((c) => c.ok).flatMap((c) => c.products ?? []));
+  return [...freed].filter((p) => !kept.has(p)).sort();
+}
+
+export const NO_REPLY_MESSAGE =
+  "Confluence did not answer. The change may or may not have gone through; check the person's groups in Atlassian Administration before trying again.";
 
 // ---------------------------------------------------------------------------
 // Side effects (all as the signed-in admin)
@@ -191,12 +203,20 @@ export const fetchUserGroupsLive = (accountId) => fetchUserGroups(accountId, { a
 export async function removeFromGroups(accountId, groups) {
   const results = [];
   for (const g of groups) {
-    const res = await api
-      .asUser()
-      .requestConfluence(route`/wiki/rest/api/group/userByGroupId?groupId=${g.groupId}&accountId=${accountId}`, {
-        method: 'DELETE',
-        headers: JSON_HEADERS,
-      });
+    let res;
+    try {
+      res = await api
+        .asUser()
+        .requestConfluence(route`/wiki/rest/api/group/userByGroupId?groupId=${g.groupId}&accountId=${accountId}`, {
+          method: 'DELETE',
+          headers: JSON_HEADERS,
+        });
+    } catch {
+      // No response at all. The removal may have happened, so it is recorded
+      // as unknown: undo re-adds it, and the admin is told to check.
+      results.push({ groupId: g.groupId, name: g.name, products: g.products, ok: false, unknown: true, error: NO_REPLY_MESSAGE });
+      continue;
+    }
     const ok = res.ok;
     results.push({
       groupId: g.groupId,
@@ -213,13 +233,19 @@ export async function removeFromGroups(accountId, groups) {
 export async function addToGroups(accountId, groups) {
   const results = [];
   for (const g of groups) {
-    const res = await api
-      .asUser()
-      .requestConfluence(route`/wiki/rest/api/group/userByGroupId?groupId=${g.groupId}`, {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ accountId }),
-      });
+    let res;
+    try {
+      res = await api
+        .asUser()
+        .requestConfluence(route`/wiki/rest/api/group/userByGroupId?groupId=${g.groupId}`, {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ accountId }),
+        });
+    } catch {
+      results.push({ groupId: g.groupId, name: g.name, ok: false, unknown: true, error: NO_REPLY_MESSAGE });
+      continue;
+    }
     const body = res.ok ? null : await bodyOf(res);
     const ok = res.ok || alreadyMember(res.status, body);
     results.push({ groupId: g.groupId, name: g.name, ok, error: ok ? null : explainChange(res.status, body) });

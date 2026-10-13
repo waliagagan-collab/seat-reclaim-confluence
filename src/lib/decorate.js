@@ -24,6 +24,7 @@ export async function decorate(rows, context) {
   ]);
   const me = context?.accountId;
   const groupsMeta = meta?.groupsMeta ?? {};
+  const accessSource = meta?.accessSource ?? 'permissions';
   return rows.map((r) => {
     const plan = planReclaim({
       userGroupIds: r.groups,
@@ -36,7 +37,7 @@ export async function decorate(rows, context) {
       email: people[r.accountId]?.email ?? null,
       reclaimable: plan.reclaimable,
       pending: Boolean(plan.pending),
-      reason: reasonText(plan),
+      reason: reasonText(plan, { accessSource }),
       freedProducts: plan.freedProducts,
       removeGroups: plan.remove.map((g) => g.name),
       isProtected: Boolean(protectedList[r.accountId]),

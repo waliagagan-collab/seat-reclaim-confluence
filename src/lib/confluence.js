@@ -132,8 +132,11 @@ export async function fetchUserPage(start) {
     users: filterLicensedUsers(results),
     // Pagination follows the RAW page length, not the filtered length, or a
     // page of bots would end the listing early.
-    isLast: results.length < USER_PAGE || (total !== null && start + results.length >= total),
-    nextStart: start + USER_PAGE,
+    // Confluence may hand back fewer than asked for, so the next page starts
+    // where this one ended, and only an empty page (or the reported total)
+    // ends the listing.
+    isLast: results.length === 0 || (total !== null ? start + results.length >= total : results.length < USER_PAGE),
+    nextStart: start + results.length,
   };
 }
 

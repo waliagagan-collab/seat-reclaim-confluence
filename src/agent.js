@@ -35,7 +35,10 @@ const action = (fn) => async (payload, context) => {
 
 // The page marks "this is you" from the caller's account ID; Rovo passes it in
 // the action context, so the agent applies the same rule.
-const caller = (payload, context) => ({ accountId: context?.accountId ?? payload?.context?.accountId });
+// Agent functions get the caller as `context.principal`; resolvers as `context.accountId`.
+const caller = (payload, context) => ({
+  accountId: context?.principal?.accountId ?? context?.accountId ?? payload?.context?.accountId,
+});
 
 export const getReclaimSummary = action(async (payload, context) => {
   const meta = await getReportMeta();

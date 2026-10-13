@@ -198,18 +198,31 @@ export const newEntryId = () => `${Date.now()}-${Math.random().toString(36).slic
 
 export async function saveEntry(entry) {
   await kvs.set(logEntryKey(entry.id), entry);
-  const index = (await kvs.get(LOG_INDEX)) ?? [];
-  if (!index.includes(entry.id)) {
-    index.unshift(entry.id);
-    const dropped = index.splice(LOG_CAP);
-    for (const id of dropped) await kvs.delete(logEntryKey(id));
-    await kvs.set(LOG_INDEX, index);
-  }
+  await addToIndex(entry.id);
+  // Two admins acting in the same second can each read the index before the
+  // other's write lands. Re-reading once narrows that window to a few
+  // milliseconds; the entry itself is already stored either way.
+  const check = (await kvs.get(LOG_INDEX)) ?? [];
+  if (!check.includes(entry.id)) await addToIndex(entry.id);
   // The latest action per user lets the report mark rows already reclaimed.
+  // An undo of an OLDER action must not hide a newer one.
   const key = latestKey(shardOf(entry.accountId));
   const latest = (await kvs.get(key)) ?? {};
-  latest[entry.accountId] = { id: entry.id, status: entry.status, at: entry.updatedAt ?? entry.at };
-  await kvs.set(key, latest);
+  const current = latest[entry.accountId];
+  const at = entry.updatedAt ?? entry.at;
+  if (!current || current.id === entry.id || String(current.at ?? '') <= String(at ?? '')) {
+    latest[entry.accountId] = { id: entry.id, status: entry.status, at };
+    await kvs.set(key, latest);
+  }
+}
+
+async function addToIndex(id) {
+  const index = (await kvs.get(LOG_INDEX)) ?? [];
+  if (index.includes(id)) return;
+  index.unshift(id);
+  const dropped = index.splice(LOG_CAP);
+  for (const old of dropped) await kvs.delete(logEntryKey(old));
+  await kvs.set(LOG_INDEX, index);
 }
 
 export const getEntry = (id) => kvs.get(logEntryKey(id));
