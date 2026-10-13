@@ -1,0 +1,147 @@
+modules:
+  rovo:agent:
+    - key: seat-reclaim-agent
+      name: Seat Reclaim for Confluence
+      description: "Answers questions about reclaiming unused Confluence seats: who is
+        ready to reclaim, why others can't be reclaimed, and what was reclaimed
+        or undone. Read-only, for Confluence admins. Open Rovo in Confluence to
+        use it."
+      prompt: |
+        You are Seat Reclaim for Confluence, an assistant for Confluence administrators. You answer questions about unused Confluence seats and reclaiming them, from the Seat Reclaim app's last scan, its reclaim plan and its action log.
+
+        How the data works:
+        - A scan lists licensed users who contributed nothing in Confluence during the scan period: no page, blog post, comment or file created or edited. Confluence does not record who views a page, and no app can see logins, so someone who only reads will appear in the list; suggest checking the last-active date in Atlassian Administration before reclaiming. Activity in Jira is not measured.
+        - Ready to reclaim means the app can free the seat by removing the user from the groups that grant Confluence. Can't reclaim means something stops it: their access comes from an admin group, they are on the protected list, they are the person asking, or they are in no access group the app knows. Already reclaimed means the app removed their access before.
+        - Yearly savings come only from the seat price an admin saved in the app, in their billing currency. If no price is saved, say so and never guess a price or a currency.
+
+        Rules:
+        - Use get-reclaim-summary for totals, savings and reasons. Use list-reclaim-candidates for names. Use get-reclaim-history for what was reclaimed or undone, when and by whom. Never invent users, numbers or prices.
+        - Always say when the scan was run and its period in days.
+        - You cannot reclaim, undo, protect anyone or run a scan. Reclaiming happens only on the Seat Reclaim page in Confluence administration, Settings, Apps, Seat Reclaim, where the admin selects users and confirms. Every reclaim is logged there and can be undone.
+        - If an action returns a sentence instead of data (for example, no scan yet, or the user is not a Confluence admin), pass it on plainly.
+        - Show users as a table with name, how long inactive, status and the groups reclaiming would remove, or the reason it can't be reclaimed. If more users match than were returned, say how many and offer to show more.
+        - Keep answers short and plain.
+      conversationStarters:
+        - How many Confluence seats can I reclaim, and what would that save a
+          year?
+        - Who is ready to reclaim?
+        - Why can't some users be reclaimed?
+        - What was reclaimed recently?
+      actions:
+        - get-reclaim-summary
+        - list-reclaim-candidates
+        - get-reclaim-history
+  action:
+    - key: get-reclaim-summary
+      name: Get reclaim summary
+      function: agent-reclaim-summary
+      actionVerb: GET
+      description: "Seat Reclaim summary for this Confluence site: scan date and
+        period, licensed users, users ready to reclaim, blocked with reasons,
+        already reclaimed, estimated yearly saving and the groups that grant
+        Confluence."
+      inputs:
+        detail:
+          title: Detail
+          type: string
+          required: false
+          description: "Optional. Not needed; leave empty."
+    - key: list-reclaim-candidates
+      name: List reclaim candidates
+      function: agent-reclaim-list
+      actionVerb: GET
+      description: "Inactive users from the last Seat Reclaim scan, longest inactive
+        first, with how long inactive, status, the groups reclaiming would
+        remove, or why it can't. Use whenever the user wants names."
+      inputs:
+        status:
+          title: Status
+          type: string
+          required: false
+          description: "Optional. ready, cannot (blocked) or already reclaimed. Leave
+            empty for everyone."
+        search:
+          title: Name or email
+          type: string
+          required: false
+          description: "Optional. Only users whose name or email contains this text."
+        minimumDaysInactive:
+          title: Minimum days inactive
+          type: integer
+          required: false
+          description: "Optional. Only users known to be inactive for at least this many
+            days, for example 180 or 365."
+        limit:
+          title: How many
+          type: integer
+          required: false
+          description: "Optional. How many users to return, 1 to 100. Defaults to 25."
+    - key: get-reclaim-history
+      name: Get reclaim history
+      function: agent-reclaim-history
+      actionVerb: GET
+      description: "Recent reclaims and undos done with Seat Reclaim, newest first:
+        whose seat, outcome, when, by whom, the groups they left and whether it
+        was undone."
+      inputs:
+        limit:
+          title: How many
+          type: integer
+          required: false
+          description: "Optional. How many recent actions to return, 1 to 25. Defaults to
+            10."
+  confluence:globalSettings:
+    - key: seat-reclaim-confluence-page
+      resource: main
+      render: native
+      resolver:
+        function: resolver
+      title: Seat Reclaim
+  consumer:
+    - key: scan-consumer
+      queue: scan-queue
+      # @forge/events v2+ invokes this function directly. The deprecated
+      # `resolver:` form belongs to v1.x and makes the queue push fail.
+      function: scan-worker
+  function:
+    - key: resolver
+      handler: index.handler
+    - key: agent-reclaim-summary
+      handler: agent.getReclaimSummary
+    - key: agent-reclaim-list
+      handler: agent.listReclaimCandidates
+    - key: agent-reclaim-history
+      handler: agent.getReclaimHistory
+    - key: scan-worker
+      handler: worker.handler
+      # Slices stop themselves at SLICE.softBudgetMs; this is the hard ceiling
+      # that leaves room for the final storage writes of a slice.
+      timeoutSeconds: 60
+resources:
+  - key: main
+    path: src/frontend/index.jsx
+  # Custom UI resource rendered inside a UI Kit <Frame>: its only job is the
+  # CSV download, which UI Kit components cannot trigger themselves.
+  - key: export-frame
+    path: static/export
+app:
+  runtime:
+    name: nodejs22.x
+  licensing:
+    enabled: true
+  id: ari:cloud:ecosystem::app/58d99f0c-7d3d-4b5e-be99-4c3cd5e15e0e
+permissions:
+  scopes:
+    # Reading: who holds a seat, what they did, and which groups grant access.
+    - read:content-details:confluence # list the site's users (/search/user)
+    - read:confluence-user # profiles, a user's groups, and whether they can still use the site
+    - read:confluence-groups # the groups that grant Confluence (by global permission)
+    - search:confluence # content search by CQL
+    - read:page:confluence # version history of a page (v2)
+    - read:blogpost:confluence # version history of a blog post (v2)
+    # The one write scope. It is used for exactly two calls, both made as the
+    # signed-in site admin after they confirm: leave a group that grants
+    # Confluence (reclaim) and rejoin it (undo). Confluence itself requires a
+    # site admin for both.
+    - write:confluence-groups
+    - storage:app
