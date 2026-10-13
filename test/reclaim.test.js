@@ -10,7 +10,7 @@ import {
   isIdpManaged,
   alreadyMember,
 } from '../src/lib/reclaim.js';
-import { buildGroupsMeta, guessAccessGroups, normaliseGroup } from '../src/lib/confluence.js';
+import { buildGroupsMeta, guessAccessGroups, normaliseGroup, seatHeldInSearch } from '../src/lib/confluence.js';
 
 // A site as Confluence's group list reports it: the default access group has
 // "Can use", the Confluence admin group has admin (and use), and org-admins and
@@ -153,4 +153,21 @@ test('undo treats "already a member" as restored', () => {
   assert.equal(alreadyMember(409, { message: 'Membership already exists' }), true);
   assert.equal(alreadyMember(400, { message: 'Something else' }), false);
   assert.equal(alreadyMember(500, null), false);
+});
+
+test('after a reclaim, the seat counts as free only when the site directory no longer grants "use"', () => {
+  const use = { operation: 'use', targetType: 'application' };
+  const admin = { operation: 'administer', targetType: 'application' };
+  const page = [
+    { user: { accountId: 'a1', accountType: 'atlassian', operations: [use] } },
+    { user: { accountId: 'a2', accountType: 'atlassian', operations: [admin] } },
+    { user: { accountId: 'a3', accountType: 'atlassian' } },
+  ];
+  assert.equal(seatHeldInSearch(page, 'a1'), true, 'still has use');
+  assert.equal(seatHeldInSearch(page, 'a2'), false, 'listed without use');
+  assert.equal(seatHeldInSearch(page, 'gone'), false, 'no longer in the directory');
+  assert.equal(seatHeldInSearch(page, 'a3'), null, 'operations missing: unknown, never a false alarm');
+  assert.equal(seatHeldInSearch(undefined, 'a1'), null);
+  // Results may also come un-nested.
+  assert.equal(seatHeldInSearch([{ accountId: 'a1', operations: [] }], 'a1'), false);
 });

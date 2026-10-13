@@ -557,15 +557,35 @@ export async function fetchUserGroups(accountId, { asUser = false } = {}) {
 }
 
 /**
- * Does Confluence still let this account use the site? true | false | null
- * (null: Confluence did not report the account's operations). Asked after a
- * reclaim, so the app reports what Confluence says rather than what it hoped.
+ * Pure: from a page of the site's user search (expand=operations), does this
+ * account still hold a Confluence seat? true | false | null (null: the search
+ * returned the account without its operations, so nothing can be concluded).
+ * An account the search no longer returns holds no seat.
+ */
+export function seatHeldInSearch(results, accountId) {
+  if (!Array.isArray(results)) return null;
+  const me = results.map((r) => r?.user ?? r).find((u) => u?.accountId === accountId);
+  if (!me) return false;
+  if (!Array.isArray(me.operations)) return null;
+  return me.operations.some((o) => o?.operation === 'use' && o?.targetType === 'application');
+}
+
+/**
+ * Does Confluence still let this account use the site? true | false | null.
+ * Asked after a reclaim, so the app reports what Confluence says rather than
+ * what it hoped. It asks the site's user directory, the same search the seat
+ * count uses, because `/wiki/rest/api/user?expand=operations` keeps reporting
+ * "use" for an account that has just lost product access while the directory
+ * (and Atlassian's count) already drop it.
  */
 export async function canUseConfluence(accountId, { asUser = true } = {}) {
-  const params = searchParams({ accountId, expand: 'operations' });
-  const body = await getJson(route`/wiki/rest/api/user?${params}`, { asUser });
-  if (!Array.isArray(body?.operations)) return null;
-  return body.operations.some((o) => o?.operation === 'use' && o?.targetType === 'application');
+  const params = searchParams({
+    cql: `type = user and user.accountid = ${quote(accountId)}`,
+    limit: 5,
+    expand: 'operations',
+  });
+  const body = await getJson(route`/wiki/rest/api/search/user?${params}`, { asUser });
+  return seatHeldInSearch(body?.results, accountId);
 }
 
 const COUNT_PAGES = 15; // 3,000 accounts; beyond that the count is reported as partial
