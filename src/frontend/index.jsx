@@ -33,7 +33,7 @@ import { invoke, view } from '@forge/bridge';
 import { licenseGate, licenseMessage } from '../lib/scan.js';
 import { bandOptions, filterRows, fmtMoney, normaliseSeatCosts, scanProgress, showReviewPrompt, yearlySaving } from '../lib/ui.js';
 
-const REVIEW_URL = 'https://marketplace.atlassian.com/search?query=Seat%20Reclaim%20for%20Confluence';
+const REVIEW_URL = 'https://marketplace.atlassian.com/apps/3455028003?tab=reviews';
 
 // The one product this app prices. Seat prices are stored by product name.
 const PRODUCT = 'Confluence';
