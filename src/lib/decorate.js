@@ -7,6 +7,16 @@ export const protectedReasonFor = (accountId, protectedList, me) =>
   accountId === me ? 'self' : protectedList[accountId] ? 'protected' : null;
 
 /**
+ * Pure: the last action that still says something about a row. A scan lists
+ * only people who hold a seat while it runs, so an action from before the
+ * scan started (a reclaim since reversed outside the app, an old failure) is
+ * out of date and is ignored. Reports built before the start time was kept
+ * have no `startedAt`; for those every action counts, as it did then.
+ */
+export const currentAction = (action, startedAt) =>
+  action && (!startedAt || String(action.at ?? '') >= String(startedAt)) ? action : null;
+
+/**
  * Stored rows carry account IDs only. Names and emails are attached here, at
  * read time, so they are always current and never sit in storage. Each row
  * also gets its reclaim plan from the scan snapshot and the latest action.
@@ -25,9 +35,11 @@ export async function decorate(rows, context) {
   const me = context?.accountId;
   const groupsMeta = meta?.groupsMeta ?? {};
   const accessSource = meta?.accessSource ?? 'permissions';
-  return rows.map((r) => {
+  // The row's group ids are for the plan only. They are not sent to the page:
+  // rows stored by earlier versions carry every group the person is in.
+  return rows.map(({ groups, ...r }) => {
     const plan = planReclaim({
-      userGroupIds: r.groups,
+      userGroupIds: groups,
       groupsMeta,
       protectedReason: r.accountId === me ? 'self' : null,
     });
@@ -41,7 +53,7 @@ export async function decorate(rows, context) {
       freedProducts: plan.freedProducts,
       removeGroups: plan.remove.map((g) => g.name),
       isProtected: Boolean(protectedList[r.accountId]),
-      lastAction: latest[r.accountId] ?? null,
+      lastAction: currentAction(latest[r.accountId], meta?.startedAt),
     };
   });
 }

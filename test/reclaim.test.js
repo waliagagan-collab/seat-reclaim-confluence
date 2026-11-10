@@ -133,6 +133,12 @@ test('a user whose groups the scan could not read stays selectable, and is plann
 test('skip reasons at reclaim time are plain', () => {
   assert.match(reasonText({ reclaimable: false, reason: 'active-since-scan' }), /contributed to Confluence since the scan/);
   assert.match(reasonText({ reclaimable: false, reason: 'unconfirmed-activity' }), /Could not confirm/);
+  assert.equal(reasonText({ reclaimable: false, reason: 'not-on-list' }), 'Not on the current list. Run a new scan.');
+  assert.match(reasonText({ reclaimable: false, reason: 'in-flight' }), /less than a minute ago/);
+});
+
+test('a rate limit on a group change is explained as one', () => {
+  assert.match(explainChange(429, null), /slow down/);
 });
 
 test('a 403 on reclaim tells the admin that site admin is required', () => {
@@ -163,7 +169,10 @@ test('only groups that were actually left count as freed products', () => {
     { groupId: 'g1', name: 'confluence-users', products: ['Confluence'], ok: true },
     { groupId: 'g2', name: 'extra', products: ['Confluence'], ok: false, error: 'refused' },
   ];
-  assert.deepEqual(freedProductsFrom(changes), ['Confluence']);
+  // The seat is still held through the group that refused, so nothing is freed yet.
+  assert.deepEqual(freedProductsFrom(changes), []);
+  assert.deepEqual(freedProductsFrom(changes.filter((c) => c.ok)), ['Confluence']);
+  assert.deepEqual(freedProductsFrom(changes.map((c) => ({ ...c, ok: true }))), ['Confluence']);
   assert.deepEqual(freedProductsFrom(changes.map((c) => ({ ...c, ok: false }))), []);
   assert.deepEqual(freedProductsFrom(changes, [{ product: 'Confluence', via: 'org-admins' }]), []);
   assert.deepEqual(freedProductsFrom(undefined), []);

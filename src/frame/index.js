@@ -20,7 +20,7 @@ export const tableOf = (rows) => [
     r.label ?? '',
     r.lastAction?.status === 'reclaimed'
       ? 'Already reclaimed'
-      : r.reclaimable && !r.isProtected
+      : r.reclaimable && !r.isProtected && r.lastAction?.status !== 'blocked'
         ? r.lastAction?.status === 'partial'
           ? 'Yes (partly reclaimed)'
           : r.pending
@@ -28,7 +28,8 @@ export const tableOf = (rows) => [
             : 'Yes'
         : 'No',
     (r.removeGroups ?? []).join(' / '),
-    r.isProtected ? 'On your protected list.' : (r.reason ?? ''),
+    // "blocked": a try found the app cannot reclaim this person; the reason is kept with it.
+    r.isProtected ? 'On your protected list.' : ((r.lastAction?.status === 'blocked' ? r.lastAction.reason : r.reason) ?? ''),
     r.accountId,
   ]),
 ];

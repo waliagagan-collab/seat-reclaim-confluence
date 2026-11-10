@@ -28,10 +28,15 @@ const queue = new Queue({ key: 'scan-queue' });
  * from the last committed cursor; every write is idempotent, so replaying is
  * safe.
  */
+// Forge stops a chain of queue events after 1,000 pushes, so a slice does as
+// much as its time allows: the manifest gives the function 300 seconds. One
+// user can cost about a hundred calls, so a slice stops itself at 220 and
+// keeps 80 seconds for the user it is on. The counts below only bound what
+// one slice holds in memory before it writes.
 const SLICE = {
-  contentPages: 12,
-  verifyUsers: 30,
-  softBudgetMs: 25_000, // stop early; one user can cost ~100 calls, and the manifest gives the function 60s
+  contentPages: 75,
+  verifyUsers: 200,
+  softBudgetMs: 220_000, // stop early; the manifest gives the function 300s
 };
 const CONTENT_PAGE = 50;
 const MAX_CONTENT_PAGES = 400; // sweep ceiling; verify makes a partial sweep harmless
@@ -41,7 +46,7 @@ export const SWEEP_TRUNCATED_WARNING =
   `This site had more than ${MAX_CONTENT_PAGES * CONTENT_PAGE} pages, posts, comments or files modified in the window, so the activity sweep stopped at the most recent ${MAX_CONTENT_PAGES * CONTENT_PAGE}. Every remaining user was still verified individually against all content the app can see, so the list is unaffected — the scan just took longer.`;
 
 export const unverifiedWarning = (n) =>
-  `${n} ${n === 1 ? 'user contributes' : 'users contribute'} to more content than the check can examine, so ${n === 1 ? 'that user was' : 'they were'} counted as active rather than risk a wrong name on the list.`;
+  `${n} ${n === 1 ? 'user contributes' : 'users contribute'} to more content than the check can examine, or to a whiteboard or database (apps cannot read who edited those), so ${n === 1 ? 'that user was' : 'they were'} counted as active rather than risk a wrong name on the list.`;
 
 export const GROUPS_UNREADABLE_WARNING =
   "The app could not read users' groups during the scan, so each person's groups are read live when you reclaim.";
@@ -80,7 +85,9 @@ export async function handler(event) {
         return await fail(state, `Unknown scan phase "${state.phase}"`);
     }
     // A cancel or a new scan landed while this slice ran: its scratch writes
-    // would otherwise sit in storage for ever.
+    // would otherwise sit in storage for ever. (`null` is different: another
+    // copy of this slice committed first and the run goes on, so nothing is
+    // deleted.)
     if (live === false) await clearRun(state.run);
     return undefined;
   } catch (err) {
@@ -110,6 +117,12 @@ export async function handler(event) {
  * Commit a patch only if this run is still the live one. A cancel that lands
  * mid-slice must win; without this check the slice would overwrite it with
  * its stale `status: 'running'` snapshot and carry on.
+ *
+ * Returns true when the patch was written, false when the run is over
+ * (cancelled or replaced), and null when another copy of this slice has
+ * already committed: queue events are delivered at least once, and two copies
+ * can start before either commits. The late copy writes nothing and pushes
+ * nothing.
  */
 async function commit(state, patch, { requeue = true } = {}) {
   const fresh = await getScanState();
@@ -118,12 +131,28 @@ async function commit(state, patch, { requeue = true } = {}) {
     await clearRun(state.run);
     return false;
   }
+  if ((fresh.seq ?? 0) !== (state.seq ?? 0)) return null;
   // The seq only moves when a new event is sent; a pause (rate limit) keeps
   // it, so the platform's retry of the same event is still accepted.
   const seq = requeue ? (fresh.seq ?? 0) + 1 : (fresh.seq ?? 0);
-  const next = { ...fresh, ...patch, seq };
+  const next = { ...fresh, ...patch, seq, paused: false };
   await setScanState(next);
-  if (requeue) await queue.push({ body: { run: state.run, seq } });
+  if (requeue) {
+    try {
+      await queue.push({ body: { run: state.run, seq } });
+    } catch (err) {
+      // The cursor is saved, so nothing is lost. Forge refuses the push after
+      // 1,000 in one chain; any other failure is treated the same. The run is
+      // marked paused, and the page's status poll (a fresh chain) sends the
+      // next event.
+      await setScanState({
+        ...next,
+        paused: true,
+        pauses: (next.pauses ?? 0) + 1,
+        pauseReason: String(err?.message ?? err).slice(0, 300),
+      });
+    }
+  }
   return true;
 }
 
@@ -139,7 +168,9 @@ async function pause(state, patch, err) {
 
 async function fail(state, error) {
   const fresh = await getScanState();
-  if (!fresh || fresh.run !== state.run) return;
+  if (!fresh || fresh.run !== state.run || fresh.status !== 'running') return;
+  // A late copy of a slice must not fail a run that has moved on without it.
+  if ((fresh.seq ?? 0) !== (state.seq ?? 0)) return;
   await setScanState({
     ...fresh,
     status: 'failed',
@@ -221,6 +252,7 @@ async function doVerify(state) {
   let dormantFound = state.dormantFound ?? 0;
   let unverified = state.unverified ?? 0;
   let groupsUnreadable = Boolean(state.groupsUnreadable);
+  const groupsMeta = state.groupsMeta ?? {};
   let checked = 0;
   let paused = null;
 
@@ -238,6 +270,7 @@ async function doVerify(state) {
       }
 
       let result;
+      let groups = null;
       try {
         result = await verifyCandidate(accountId, state.days);
       } catch (err) {
@@ -253,23 +286,29 @@ async function doVerify(state) {
           throw err;
         }
       }
+      if (!result.active && !groupsUnreadable) {
+        try {
+          // Only the groups that grant Confluence are kept: they are all a
+          // reclaim plan reads, and a person can be in hundreds of others.
+          groups = (await fetchUserGroups(accountId)).map((g) => g.id).filter((id) => groupsMeta[id]);
+        } catch (err) {
+          if (err.rateLimited) {
+            paused = err; // what the slice has so far is saved; this user is done again
+            break;
+          }
+          if (err.retryable) throw err;
+          // The app is not allowed to read groups: that would repeat for every
+          // user. Note it once; the reclaim step reads groups live as the
+          // admin instead. Any other refusal is about this one account.
+          if (err.status === 401 || err.status === 403) groupsUnreadable = true;
+        }
+      }
       index += 1;
       checked += 1;
       verified += 1;
       if (result.unverified) unverified += 1;
       if (!result.active) {
         dormantFound += 1;
-        let groups = null;
-        if (!groupsUnreadable) {
-          try {
-            groups = (await fetchUserGroups(accountId)).map((g) => g.id);
-          } catch (err) {
-            if (err.rateLimited || err.retryable) throw err;
-            // A refusal would repeat for every user. Note it once; the reclaim
-            // step reads groups live as the admin instead.
-            groupsUnreadable = true;
-          }
-        }
         dormantRows.push({
           accountId,
           products: [PRODUCT],
@@ -314,33 +353,52 @@ async function doFinalize(state) {
 
   const unverified = state.unverified ?? 0;
   const groupsMeta = state.groupsMeta ?? {};
-  const report = await buildReport(state.run, {
-    days: state.days,
-    products: [{ key: 'confluence', name: PRODUCT }],
-    groupsMeta,
-    // Which groups grant Confluence, for the page and the agent.
-    accessGroups: Object.entries(groupsMeta)
-      .map(([id, g]) => ({ id, name: g.name, admin: Boolean(g.admin) }))
-      .sort((a, b) => Number(a.admin) - Number(b.admin) || a.name.localeCompare(b.name)),
-    accessSource: state.accessSource ?? 'none',
-    totalUsers,
-    activeUsers: totalUsers - (state.dormantFound ?? 0),
-    guests: state.guests ?? 0,
-    unverified,
-    verified: state.verified ?? 0,
-    itemsScanned: state.itemsScanned ?? 0,
-    sweepTruncated: Boolean(state.sweepTruncated),
-    warnings: [
-      ...(state.warnings ?? []),
-      ...(state.sweepTruncated ? [SWEEP_TRUNCATED_WARNING] : []),
-      ...(unverified ? [unverifiedWarning(unverified)] : []),
-      ...(state.groupsUnreadable ? [GROUPS_UNREADABLE_WARNING] : []),
-    ],
-  });
+  const report = await buildReport(
+    state.run,
+    {
+      days: state.days,
+      // When the scan started: an action on a user from before this moment
+      // says nothing about a row of this report.
+      startedAt: state.startedAt ?? null,
+      products: [{ key: 'confluence', name: PRODUCT }],
+      groupsMeta,
+      // Which groups grant Confluence, for the page and the agent.
+      accessGroups: Object.entries(groupsMeta)
+        .map(([id, g]) => ({ id, name: g.name, admin: Boolean(g.admin) }))
+        .sort((a, b) => Number(a.admin) - Number(b.admin) || a.name.localeCompare(b.name)),
+      accessSource: state.accessSource ?? 'none',
+      totalUsers,
+      activeUsers: totalUsers - (state.dormantFound ?? 0),
+      guests: state.guests ?? 0,
+      unverified,
+      verified: state.verified ?? 0,
+      itemsScanned: state.itemsScanned ?? 0,
+      sweepTruncated: Boolean(state.sweepTruncated),
+      warnings: [
+        ...(state.warnings ?? []),
+        ...(state.sweepTruncated ? [SWEEP_TRUNCATED_WARNING] : []),
+        ...(unverified ? [unverifiedWarning(unverified)] : []),
+        ...(state.groupsUnreadable ? [GROUPS_UNREADABLE_WARNING] : []),
+      ],
+    },
+    {
+      // Asked after the scratch data was read and before the report is
+      // written: a late copy of this slice must not publish.
+      confirm: async () => {
+        const fresh = await getScanState();
+        return Boolean(fresh && fresh.run === state.run && fresh.status === 'running' && (fresh.seq ?? 0) === (state.seq ?? 0));
+      },
+    }
+  );
+  if (!report) return null;
 
-  return commit(
+  const closed = await commit(
     state,
     { status: 'complete', phase: 'done', finishedAt: report.generatedAt },
     { requeue: false }
   );
+  // The scratch data goes only once the report is out and the run is closed,
+  // so a second copy of this slice never reads half-deleted data.
+  if (closed === true) await clearRun(state.run);
+  return closed;
 }

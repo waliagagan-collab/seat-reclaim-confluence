@@ -17,7 +17,7 @@ Find Confluence users who contribute nothing and free their seats after you conf
 
 ## Summary (≤ 250)
 
-Finds licensed Confluence users who created or edited nothing for 30 to 365 days, checked against every page, and frees their seats after you confirm by taking them out of the groups that grant Confluence. Admins are never touched; every change can be undone.
+Finds licensed Confluence users who created or edited nothing for 30 to 365 days and frees their seats after you confirm by taking them out of the groups that grant Confluence. Confluence admins are never reclaimed. Every change can be undone.
 
 ## Categories and keywords
 
@@ -31,7 +31,7 @@ Finds licensed Confluence users who created or edited nothing for 30 to 365 days
 Seat Reclaim lists the licensed users who **created or edited nothing** in a period you choose (no page, blog post, comment or file) and frees their seats after you confirm.
 
 - Which groups grant Confluence comes from Confluence itself, not from a setting you have to get right.
-- Each user shows the groups a reclaim would remove, or why it can't: admin groups, you, and your protected list are never touched.
+- Each user shows the groups a reclaim would remove, or why it can't: Confluence admins, you, and your protected list are never reclaimed.
 - Select users, check the summary, confirm. Activity and groups are re-checked live first, and Confluence confirms each seat is free.
 - History logs every change; Undo restores exactly the groups removed.
 
@@ -42,13 +42,13 @@ Confluence doesn't record who reads a page, so the list shows contributors only;
 ## Highlights (title ≤ 50, description ≤ 220)
 
 1. **Free seats, confirmed by Confluence** — Select inactive users, confirm, and the app removes them from the groups that grant Confluence, then asks Confluence to confirm each seat is free.
-2. **Check every change before it happens** — A summary lists the groups each person leaves. Activity and groups are re-checked live first. Admins, you and anyone you protect are never touched.
+2. **Check every change before it happens** — A summary lists the groups each person leaves. Activity and groups are re-checked live first. Leaving a group also removes anything else it grants. Confluence admins, you and anyone you protect are never reclaimed.
 3. **Undo any reclaim** — History records whose seat was reclaimed, who approved it, when, and which groups they left. Undo puts the person back in exactly those groups.
 
 ## Version step
 
 - Release summary: First release: find inactive Confluence users and free their seats, with undo
-- Release notes: Finds licensed Confluence users with no contribution in a period you choose, checked against every page and blog post, and frees their seats after you confirm by taking them out of the groups that grant Confluence. Admin groups, the person running it and protected users are never reclaimed. Confluence confirms each freed seat. History logs every change and Undo restores exactly the groups removed. Includes a read-only Rovo agent.
+- Release notes: Finds licensed Confluence users with no contribution in a period you choose, checked against all content the app can see, and frees their seats after you confirm by taking them out of the groups that grant Confluence. Confluence administrators, the person running it and protected users are never reclaimed. Confluence confirms each freed seat. History logs every change and Undo restores exactly the groups removed. Includes a read-only Rovo agent.
 - License: Commercial. Supported: Yes. EULA: Atlassian's standard EULA.
 
 ## Links

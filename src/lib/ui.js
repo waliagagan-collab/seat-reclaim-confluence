@@ -109,3 +109,40 @@ export function scanProgress(state) {
  * per admin.
  */
 export const showReviewPrompt = ({ earned, hidden }) => Boolean(earned) && !hidden;
+
+/**
+ * Pure: the status shown for a row: what happened last, or whether it can be
+ * reclaimed. `lastAction` is the newest History entry for the person, or a
+ * note left by a try that changed nothing (status 'blocked' or 'failed').
+ */
+export function rowStatus(u) {
+  const last = u.lastAction?.status;
+  if (last === 'reclaimed') return { text: 'Reclaimed', appearance: 'success' };
+  if (last === 'pending') return { text: 'Interrupted', appearance: 'moved' };
+  if (last === 'partial') return { text: 'Partly reclaimed', appearance: 'moved' };
+  if (u.isProtected) return { text: 'Protected', appearance: 'default' };
+  if (!u.reclaimable || last === 'blocked') return { text: 'Can’t reclaim', appearance: 'default' };
+  return { text: 'Ready', appearance: 'inprogress' };
+}
+
+/**
+ * Pure: can this row be ticked? A partly reclaimed user still has groups to
+ * leave, so they stay selectable. An interrupted reclaim (no answer) is
+ * sorted out from History first. 'blocked' is a try that found the app cannot
+ * reclaim this person at all: an administrator, or a group managed by an
+ * identity provider.
+ */
+export const canSelect = (u) =>
+  Boolean(u.reclaimable) &&
+  !u.isProtected &&
+  u.lastAction?.status !== 'reclaimed' &&
+  u.lastAction?.status !== 'pending' &&
+  u.lastAction?.status !== 'blocked';
+
+/** Pure: the small line under a row's status: why it can't be reclaimed, or what the last try said. */
+export function rowNote(u) {
+  if (u.lastAction?.status === 'blocked') return u.lastAction.reason ?? null;
+  if (!u.reclaimable || u.pending) return u.reason ?? null;
+  if (u.lastAction?.status === 'failed' && u.lastAction.reason) return `Last try: ${u.lastAction.reason}`;
+  return null;
+}

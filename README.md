@@ -14,18 +14,38 @@ Confluence has no application-role API, but its group list can be filtered by th
 permission a group holds: `GET /wiki/rest/api/group?accessType=user|admin|site-admin`.
 Members of any of those groups hold a seat. The app reads that list as the admin at scan
 time and again at reclaim time, removes the user from the non-admin groups, and then asks
-- After each reclaim the app asks the site's user directory (`GET /wiki/rest/api/search/user?cql=type=user and user.accountid=...&expand=operations`, retried for a few seconds) whether the account still holds a seat, because `/wiki/rest/api/user?expand=operations` keeps reporting access after it is gone.
-still use the site, so it reports what Confluence says rather than what it hoped.
+Confluence whether the account can still use the site, so it reports what Confluence says
+rather than what it hoped.
+
+After each reclaim the app asks the site's user directory
+(`GET /wiki/rest/api/search/user?cql=type=user and user.accountid=...&expand=operations`,
+retried for a few seconds) whether the account still holds a seat, because
+`/wiki/rest/api/user?expand=operations` keeps reporting access after it is gone.
 
 | Rule | Where |
 | --- | --- |
-| Never remove anyone from an admin group (admin/site-admin permission, or named `*admin*`) | `planReclaim` |
+| Never reclaim a Confluence administrator: anyone in a group that Confluence gives admin or site-admin permission, or in a group that grants Confluence and has "admin" in its name (`/admin/i`), is left alone | `planReclaim` |
 | Never act on the person running the app, or on the protected list | `protectedReasonFor` |
+| Act only on accounts on the current list | `getReportedIds`, `reclaim` resolver |
 | Re-check activity and re-read the user's groups live before acting; the scan is a snapshot | `reclaim` resolver |
-| Only leave groups that actually free the seat | `planReclaim` |
+| Only leave groups that grant Confluence | `planReclaim` |
 | Confirm with Confluence that the account can no longer use the site | `canUseConfluence` |
+| Write the History entry before the first group is left; keep every entry, with no limit | `saveEntry`, `addToIndex` |
 | Log exactly which groups were left; undo rejoins exactly those | `saveEntry`, `undo` |
 | Group changes run as the signed-in admin (`asUser`), never as the app | `src/lib/reclaim.js` |
+
+The name rule is wide on purpose. It also matches `badminton-club` if that group grants
+Confluence. For an app that removes access, a wrong "can't reclaim" is the safe mistake.
+
+Leaving a group also removes anything else that group grants (another product, space
+permissions). The confirm dialog says so.
+
+A reclaim that changes nothing (every group refused) leaves no History entry. The reason is
+kept on the person's row instead. A group managed by an identity provider refuses every
+time, so that row is marked "Can't reclaim".
+
+Someone who contributed to a whiteboard or database that another person changed last is
+counted as active: apps cannot read who edited those, so the app does not guess.
 
 Confluence requires a **site admin** for group membership changes. A Confluence admin who is
 not a site admin can scan and review, and gets a clear message if they try to reclaim.
@@ -43,8 +63,24 @@ and that no other module makes write calls. Runs on Atlassian: no egress.
 
 ## Storage
 
-Account IDs, group IDs and inactivity bands. Names and emails are looked up at read time.
-The action log and protected list hold IDs only.
+Account IDs, group IDs and group names, and inactivity bands. People's names and emails are
+never stored; they are looked up at read time. A report row holds the IDs of the person's
+groups that grant Confluence, not their other groups. A History entry holds the account
+IDs of the person and the approving admin, the groups left (ID and name) and, when
+Confluence refused a group change, Confluence's error text. The protected list holds
+account IDs.
+
+History keeps every entry. The newest 500 IDs are in `log:index`; older ones move, 250 at a
+time, to `log:index:<n>` pages. Entries and report rows written by earlier versions are read
+as they are.
+
+## Large sites
+
+Listing the users runs from the page, as the admin. After that the scan runs in slices on
+the Forge queue. Each slice works for up to 220 seconds (the function is allowed 300) and
+then queues the next. Forge stops a chain after 1,000 queued events. If a push is refused,
+for that or any other reason, the scan is marked paused with its cursor saved, and the
+page's status poll queues the next slice. A paused scan continues while the page is open.
 
 ## Commands
 

@@ -12,6 +12,8 @@ import {
   buildContributedCql,
   classifyDormancy,
   scanVersions,
+  isLastPage,
+  historyUnreadable,
   CONTENT_TYPES,
 } from '../src/lib/confluence.js';
 import { shardOf, SHARDS, sortDormant, mergeDormant } from '../src/lib/store.js';
@@ -285,4 +287,19 @@ test('a replayed verify slice does not duplicate users in the dormant list', () 
   const merged = mergeDormant(existing, [{ accountId: 'a', bucket: 'over-365' }, { accountId: 'b', bucket: '90-180' }]);
   assert.deepEqual(merged.map((r) => r.accountId), ['a', 'b']);
   assert.deepEqual(mergeDormant(undefined, []), []);
+});
+
+test('a short page does not end a list while Confluence links to a next one', () => {
+  assert.equal(isLastPage({ _links: { next: '/rest/api/group?start=37' } }, 37, 200), false, 'short, but there is more');
+  assert.equal(isLastPage({ _links: {} }, 37, 200), true, 'short and no next link');
+  assert.equal(isLastPage({ _links: {} }, 200, 200), false, 'a full page is followed until an empty one');
+  assert.equal(isLastPage({ _links: { next: 'x' } }, 0, 200), true, 'an empty page always ends the list');
+  assert.equal(isLastPage(undefined, 0, 200), true);
+});
+
+test('whiteboards and databases are content whose edit history apps cannot read', () => {
+  assert.equal(historyUnreadable({ type: 'whiteboard' }), true);
+  assert.equal(historyUnreadable({ type: 'database' }), true);
+  for (const type of ['page', 'blogpost', 'comment', 'attachment']) assert.equal(historyUnreadable({ type }), false, type);
+  assert.equal(historyUnreadable(undefined), false);
 });

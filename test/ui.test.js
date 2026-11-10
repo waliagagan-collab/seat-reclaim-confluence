@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { unzipSync, strFromU8 } from 'fflate';
-import { normaliseSeatCosts, yearlySaving, fmtMoney, filterRows, bandOptions, scanProgress, showReviewPrompt } from '../src/lib/ui.js';
+import { normaliseSeatCosts, yearlySaving, fmtMoney, filterRows, bandOptions, scanProgress, showReviewPrompt, rowStatus, canSelect, rowNote } from '../src/lib/ui.js';
 import { buildXlsx, columnName, xmlText, csvCell, toCsv } from '../src/frame/xlsx.js';
+import { loadFrame } from './helpers.js';
 
 test('seat prices keep only positive, sane numbers', () => {
   assert.deepEqual(
@@ -105,4 +106,53 @@ test('the review request appears once value is shown and never after it is close
   assert.equal(showReviewPrompt({ earned: false, hidden: false }), false);
   assert.equal(showReviewPrompt({ earned: true, hidden: true }), false);
   assert.equal(showReviewPrompt({ earned: undefined, hidden: undefined }), false);
+});
+
+test('a row a try found the app cannot reclaim reads "Can\u2019t reclaim", cannot be ticked, and says why', () => {
+  const ready = { reclaimable: true, isProtected: false, reason: null, lastAction: null };
+  assert.equal(rowStatus(ready).text, 'Ready');
+  assert.equal(canSelect(ready), true);
+  assert.equal(rowNote(ready), null);
+
+  const blocked = { ...ready, lastAction: { id: null, status: 'blocked', reason: 'This group is managed by your identity provider.' } };
+  assert.equal(rowStatus(blocked).text, 'Can\u2019t reclaim');
+  assert.equal(canSelect(blocked), false);
+  assert.equal(rowNote(blocked), 'This group is managed by your identity provider.');
+});
+
+test('a try that failed for a passing reason leaves the row ready and shows what the try said', () => {
+  const failed = { reclaimable: true, isProtected: false, reason: null, lastAction: { id: null, status: 'failed', reason: 'Confluence returned 500.' } };
+  assert.equal(rowStatus(failed).text, 'Ready');
+  assert.equal(canSelect(failed), true);
+  assert.equal(rowNote(failed), 'Last try: Confluence returned 500.');
+  // A "Not done" entry stored by the earlier version has no reason; the row shows nothing extra.
+  assert.equal(rowNote({ ...failed, lastAction: { id: 'x', status: 'failed' } }), null);
+});
+
+test('reclaimed and interrupted rows cannot be ticked; a partly reclaimed one can', () => {
+  const row = (status) => ({ reclaimable: true, isProtected: false, lastAction: { status } });
+  assert.equal(canSelect(row('reclaimed')), false);
+  assert.equal(rowStatus(row('pending')).text, 'Interrupted');
+  assert.equal(canSelect(row('pending')), false);
+  assert.equal(canSelect(row('partial')), true);
+  assert.equal(canSelect({ reclaimable: false, lastAction: null }), false);
+  assert.equal(canSelect({ reclaimable: true, isProtected: true, lastAction: null }), false);
+  assert.equal(rowNote({ reclaimable: false, reason: 'On your protected list.', lastAction: null }), 'On your protected list.');
+});
+
+test('the export says "No" for a row the app cannot reclaim, with the reason the try gave', async () => {
+  const { tableOf } = await loadFrame();
+  const base = { displayName: 'Ada', email: null, label: 'Over 90 days', reclaimable: true, pending: false, isProtected: false, removeGroups: ['confluence-users-acme'], reason: null, accountId: 'a' };
+  const [header, ready, blocked] = tableOf([base, { ...base, lastAction: { id: null, status: 'blocked', reason: 'This group is managed by your identity provider.' } }]);
+  const can = header.indexOf('Can reclaim');
+  const reason = header.indexOf('Reason');
+  assert.equal(ready[can], 'Yes');
+  assert.equal(blocked[can], 'No');
+  assert.equal(blocked[reason], 'This group is managed by your identity provider.');
+});
+
+test('a row whose groups are read at reclaim time says so and can still be ticked', () => {
+  const pending = { reclaimable: true, pending: true, isProtected: false, reason: "This person's groups weren't readable during the scan. They are read live when you reclaim.", lastAction: null };
+  assert.equal(canSelect(pending), true);
+  assert.match(rowNote(pending), /read live when you reclaim/);
 });

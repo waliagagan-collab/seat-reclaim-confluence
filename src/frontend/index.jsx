@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ForgeReconciler, {
   Box,
   Button,
@@ -31,7 +31,18 @@ import ForgeReconciler, {
 } from '@forge/react';
 import { invoke, view } from '@forge/bridge';
 import { licenseGate, licenseMessage } from '../lib/scan.js';
-import { bandOptions, filterRows, fmtMoney, normaliseSeatCosts, scanProgress, showReviewPrompt, yearlySaving } from '../lib/ui.js';
+import {
+  bandOptions,
+  canSelect,
+  filterRows,
+  fmtMoney,
+  normaliseSeatCosts,
+  rowNote,
+  rowStatus,
+  scanProgress,
+  showReviewPrompt,
+  yearlySaving,
+} from '../lib/ui.js';
 
 const REVIEW_URL = 'https://marketplace.atlassian.com/apps/3455028003?tab=reviews';
 
@@ -91,22 +102,6 @@ const fmtTime = (iso) => (iso ? new Date(iso).toISOString().slice(0, 16).replace
 const join = (xs) => (xs ?? []).join(', ') || '—';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Status shown for a row: what happened last, or whether it can be reclaimed. */
-function rowStatus(u) {
-  const last = u.lastAction?.status;
-  if (last === 'reclaimed') return { text: 'Reclaimed', appearance: 'success' };
-  if (last === 'pending') return { text: 'Interrupted', appearance: 'moved' };
-  if (last === 'partial') return { text: 'Partly reclaimed', appearance: 'moved' };
-  if (u.isProtected) return { text: 'Protected', appearance: 'default' };
-  if (!u.reclaimable) return { text: 'Can’t reclaim', appearance: 'default' };
-  return { text: 'Ready', appearance: 'inprogress' };
-}
-
-// A partly reclaimed user still has groups to leave, so they stay selectable.
-// An interrupted reclaim (no answer from Confluence) is sorted out from History first.
-const canSelect = (u) =>
-  u.reclaimable && !u.isProtected && u.lastAction?.status !== 'reclaimed' && u.lastAction?.status !== 'pending';
-
 // ---------------------------------------------------------------------------
 // Inactive users tab
 // ---------------------------------------------------------------------------
@@ -142,10 +137,11 @@ const HowItWorks = ({ compact, onToggle }) =>
           no page, blog post, comment or file. Every candidate is checked against all content the app can see. Confluence
           does not record who <Strong>views</Strong> a page, so someone who only reads will appear here; if in doubt,
           check their last-active date in Atlassian Administration. Then pick who to reclaim. The app takes them out
-          of the groups that grant Confluence, which frees the seat, and asks Confluence to confirm. Admins and you
-          are never touched, and you can <Strong>Protect</Strong> anyone else you want left alone. Nothing changes
-          until you confirm; each person's activity and groups are re-checked live first, and every change can be
-          undone from the History tab.
+          of the groups that grant Confluence, which frees the seat, and asks Confluence to confirm. Two kinds of
+          people are never reclaimed: Confluence administrators (anyone in a group that Confluence gives admin or
+          site admin permission, or in a group that grants Confluence and has "admin" in its name), and you. You can{' '}
+          <Strong>Protect</Strong> anyone else you want left alone. Nothing changes until you confirm; each person's
+          activity and groups are re-checked live first, and every change can be undone from the History tab.
         </Text>
         {onToggle && (
           <Box>
@@ -380,52 +376,76 @@ function AuditPanel({ gate, onChanged, version }) {
   const accessGroups = report?.accessGroups ?? [];
   const accessText = accessGroups.map((g) => (g.admin ? `${g.name} (admin, never removed)` : g.name)).join(', ');
 
+  // One run at a time. The confirm button can be clicked twice before the
+  // dialog closes; a ref says so at once, where state would say so too late.
+  const reclaiming = useRef(false);
+
   /** Reclaim in small batches; read Confluence's own user count before and after. */
   const runReclaim = async () => {
+    if (reclaiming.current) return;
+    reclaiming.current = true;
     setConfirmOpen(false);
     setOutcome(null);
     setMessage(null);
-    const ids = chosen.map((u) => u.accountId);
+    const names = Object.fromEntries(chosen.map((u) => [u.accountId, u.displayName]));
+    const queue = chosen.map((u) => u.accountId);
+    const total = queue.length;
+    const tries = {};
     const results = [];
     let before = null;
     let after = null;
     try {
-      before = await invoke('getSeatCount');
-    } catch {
-      /* the counts are a bonus; the reclaim does not depend on them */
-    }
-    for (let i = 0; i < ids.length; i += BATCH) {
-      setProgress({ done: i, total: ids.length });
       try {
-        const res = await invoke('reclaim', { accountIds: ids.slice(i, i + BATCH) });
-        if (!res?.ok) {
-          results.push(...ids.slice(i, i + BATCH).map((accountId) => ({ accountId, ok: false, error: res?.error })));
-          if (res?.unlicensed || res?.forbidden) break;
-        } else {
-          results.push(...(res.results ?? []));
-        }
+        before = await invoke('getSeatCount');
       } catch {
-        // No answer: the groups may well have been left. History is the truth.
-        results.push(
-          ...ids.slice(i, i + BATCH).map((accountId) => ({
-            accountId,
-            ok: false,
-            unknown: true,
-            error: 'No reply from Confluence. The change may have gone through; check the History tab before trying again.',
-          }))
-        );
+        /* the counts are a bonus; the reclaim does not depend on them */
       }
+      while (queue.length) {
+        const batch = queue.splice(0, BATCH);
+        setProgress({ done: total - queue.length - batch.length, total });
+        try {
+          const res = await invoke('reclaim', { accountIds: batch });
+          if (!res?.ok) {
+            results.push(...batch.map((accountId) => ({ accountId, ok: false, error: res?.error })));
+            if (res?.unlicensed || res?.forbidden) break;
+            continue;
+          }
+          for (const r of res.results ?? []) {
+            // Confluence asked for a pause before anything changed for this
+            // person: they go back in the queue, at most twice.
+            if (r.retry && (tries[r.accountId] = (tries[r.accountId] ?? 0) + 1) <= 2) queue.push(r.accountId);
+            else results.push(r);
+          }
+          if (res.retryAfter) {
+            setProgress({ done: total - queue.length, total, waiting: true });
+            await sleep(Math.min(60, Number(res.retryAfter) || 5) * 1000);
+          }
+        } catch {
+          // No answer: the groups may well have been left. History is the truth.
+          results.push(
+            ...batch.map((accountId) => ({
+              accountId,
+              ok: false,
+              unknown: true,
+              error: 'No reply from Confluence. The change may have gone through; check the History tab before trying again.',
+            }))
+          );
+        }
+      }
+      try {
+        after = await invoke('getSeatCount');
+      } catch {
+        /* see above */
+      }
+      setProgress(null);
+      setSelected(new Set());
+      setOutcome({ results: results.map((r) => ({ ...r, displayName: r.displayName ?? names[r.accountId] ?? r.accountId })), before, after });
+      await loadAll();
+      onChanged?.();
+    } finally {
+      setProgress(null);
+      reclaiming.current = false;
     }
-    try {
-      after = await invoke('getSeatCount');
-    } catch {
-      /* see above */
-    }
-    setProgress(null);
-    setSelected(new Set());
-    setOutcome({ results, before, after });
-    await loadAll();
-    onChanged?.();
   };
 
   return (
@@ -485,7 +505,11 @@ function AuditPanel({ gate, onChanged, version }) {
             {phaseText(state)}.{' '}
             {state?.phase === 'directory'
               ? 'Keep this page open for a moment while users are listed.'
-              : 'You can leave this page — the scan continues.'}
+              : state?.paused
+                ? 'The scan is paused. It continues while this page is open.'
+                : state?.pauses
+                  ? 'This is a long scan. It pauses now and then and continues while this page is open, so keep the page open.'
+                  : 'You can leave this page — the scan continues.'}
           </Text>
         </Stack>
       )}
@@ -522,8 +546,9 @@ function AuditPanel({ gate, onChanged, version }) {
         <Stack space="space.075">
           <ProgressBar ariaLabel="Reclaim progress" value={progress.total ? progress.done / progress.total : 0} />
           <Text>
-            Reclaiming seats — {Math.min(progress.done + BATCH, progress.total)} of {progress.total} users. Keep this
-            page open.
+            {progress.waiting
+              ? 'Confluence asked the app to slow down. Waiting a moment before the next users. Keep this page open.'
+              : `Reclaiming seats — ${Math.min(progress.done + BATCH, progress.total)} of ${progress.total} users. Keep this page open.`}
           </Text>
         </Stack>
       )}
@@ -723,7 +748,7 @@ function AuditPanel({ gate, onChanged, version }) {
                         content: (
                           <Stack space="space.050">
                             <Lozenge appearance={st.appearance}>{st.text}</Lozenge>
-                            {(!u.reclaimable || u.pending) && u.reason && <Text size="small">{u.reason}</Text>}
+                            {rowNote(u) && <Text size="small">{rowNote(u)}</Text>}
                             {canSelect(u) && !u.pending && <Text size="small">Leaves: {join(u.removeGroups)}</Text>}
                           </Stack>
                         ),
@@ -775,7 +800,8 @@ function AuditPanel({ gate, onChanged, version }) {
               <Stack space="space.150">
                 <Text>
                   Each person below is taken out of the listed groups, which removes their Confluence access and frees
-                  the seat. Their Atlassian account stays active and their pages keep their name. Before each change
+                  the seat. Leaving a group also removes anything else that group grants. Their Atlassian account stays
+                  active and their pages keep their name. Before each change
                   the app checks live that the person is still inactive and reads their groups again; anyone who has
                   contributed since the scan is skipped. Afterwards it asks Confluence to confirm the seat is free. You
                   can undo any of it from the History tab.
@@ -998,7 +1024,8 @@ function HistoryPanel({ version, onChanged }) {
                 {
                   key: 'act',
                   content:
-                    e.status === 'restored' ? null : (
+                    // "Not done" changed nothing, so there is nothing to undo.
+                    e.status === 'restored' || e.status === 'failed' ? null : (
                       <Button spacing="compact" onClick={() => undo(e)} isDisabled={Boolean(working)}>
                         {working === e.id ? 'Undoing…' : 'Undo'}
                       </Button>

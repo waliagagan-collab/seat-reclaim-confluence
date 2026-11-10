@@ -122,6 +122,14 @@ const canUse = (u) =>
 
 const USER_PAGE = 200;
 
+/**
+ * Pure: is this page of a v1 list the last one? Confluence may hand back fewer
+ * items than asked for in the middle of a list, so a short page alone proves
+ * nothing. The list ends on an empty page, or on a short page that carries no
+ * link to a next one.
+ */
+export const isLastPage = (body, count, limit) => count === 0 || (!body?._links?.next && count < limit);
+
 /** One page of the site's users, by offset. */
 export async function fetchUserPage(start) {
   const params = searchParams({ cql: 'type = user', start, limit: USER_PAGE, expand: 'operations' });
@@ -135,7 +143,7 @@ export async function fetchUserPage(start) {
     // Confluence may hand back fewer than asked for, so the next page starts
     // where this one ended, and only an empty page (or the reported total)
     // ends the listing.
-    isLast: results.length === 0 || (total !== null ? start + results.length >= total : results.length < USER_PAGE),
+    isLast: total !== null ? results.length === 0 || start + results.length >= total : isLastPage(body, results.length, USER_PAGE),
     nextStart: start + results.length,
   };
 }
@@ -290,9 +298,14 @@ const byUser = (version, accountId, since) =>
  * Only pages and blog posts get a full history walk: they are the content
  * many people edit in turn. A comment or attachment is edited by its author
  * or nobody, so its latest version already says who acted. Whiteboards and
- * databases expose no version list to apps.
+ * databases are also edited by many people in turn, but expose no version
+ * list to apps: when someone else made the latest change to one, the app
+ * cannot tell whether this user edited it too, and says so ('unknown').
  */
 const VERSIONED = { page: 'pages', blogpost: 'blogposts' };
+
+/** Pure: content many people edit whose history an app cannot read. */
+export const historyUnreadable = (item) => item?.type === 'whiteboard' || item?.type === 'database';
 
 /** Pure: a v2 versions page -> true | false | 'more' (older versions remain). */
 export function scanVersions(results, accountId, since) {
@@ -314,6 +327,7 @@ export function scanVersions(results, accountId, since) {
 /** Did this user save a version of the item inside the window? true | false | 'unknown' */
 async function userEditedSince(item, accountId, since) {
   const collection = VERSIONED[item?.type];
+  if (historyUnreadable(item)) return 'unknown';
   if (!collection || !item?.id) return false;
   let cursor = null;
   for (let page = 0; page < MAX_VERSION_PAGES; page++) {
@@ -329,8 +343,9 @@ async function userEditedSince(item, accountId, since) {
 
 /**
  * true | false | 'unknown'. 'unknown' means the user touches more content than
- * the check can examine within budget; the caller treats it as active, so a
- * wrong name never reaches the list.
+ * the check can examine within budget, or a whiteboard or database someone
+ * else changed last; the caller treats it as active, so a wrong name never
+ * reaches the list.
  */
 export async function wasActiveWithin(accountId, days) {
   const since = windowStart(days);
@@ -519,11 +534,14 @@ export function guessAccessGroups(groups) {
 
 async function fetchGroupPages(params, asUser) {
   const out = [];
-  for (let start = 0; out.length < MAX_GROUPS; start += GROUP_PAGE) {
+  let start = 0;
+  while (out.length < MAX_GROUPS) {
     const body = await getJson(route`/wiki/rest/api/group?${searchParams({ ...params, start, limit: GROUP_PAGE })}`, { asUser });
     const results = body?.results ?? [];
     out.push(...results);
-    if (results.length < GROUP_PAGE) break;
+    // The next page starts where this one ended, however short it was.
+    if (isLastPage(body, results.length, GROUP_PAGE)) break;
+    start += results.length;
   }
   return out;
 }
@@ -549,12 +567,14 @@ export async function fetchAccessGroups({ asUser = true } = {}) {
 /** The groups a user is in right now: [{ id, name }]. */
 export async function fetchUserGroups(accountId, { asUser = false } = {}) {
   const out = [];
-  for (let start = 0; out.length < MAX_GROUPS; start += GROUP_PAGE) {
+  let start = 0;
+  while (out.length < MAX_GROUPS) {
     const params = searchParams({ accountId, start, limit: GROUP_PAGE });
     const body = await getJson(route`/wiki/rest/api/user/memberof?${params}`, { asUser });
     const results = body?.results ?? [];
     out.push(...results.map(normaliseGroup).filter(Boolean));
-    if (results.length < GROUP_PAGE) break;
+    if (isLastPage(body, results.length, GROUP_PAGE)) break;
+    start += results.length;
   }
   return out;
 }

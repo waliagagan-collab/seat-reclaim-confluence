@@ -125,6 +125,10 @@ export function reasonText(plan, { accessSource = 'permissions' } = {}) {
       return 'Has contributed to Confluence since the scan, so their seat was left alone. Run a new scan for a current list.';
     case 'unconfirmed-activity':
       return 'Could not confirm this person is still inactive (they contribute to more content than the check can examine), so their seat was left alone.';
+    case 'not-on-list':
+      return 'Not on the current list. Run a new scan.';
+    case 'in-flight':
+      return 'A reclaim for this person started less than a minute ago. Check the History tab before trying again.';
     default:
       return 'Cannot be reclaimed.';
   }
@@ -154,9 +158,13 @@ export const isIdpManaged = (status, body) =>
   (status === 400 || status === 403) &&
   /not modifiable|identity provider|scim|externally managed|read[- ]?only|managed by/i.test(errorText(body));
 
+export const RATE_LIMITED_MESSAGE =
+  'Confluence asked the app to slow down (429). Nothing was changed for this group; try again in a minute.';
+
 /** Pure: words for a failed Confluence call during reclaim or undo. */
 export function explainChange(status, body) {
   if (isIdpManaged(status, body)) return IDP_MANAGED_MESSAGE;
+  if (status === 429) return RATE_LIMITED_MESSAGE;
   const text = errorText(body);
   const detail = text ? ` (${text})` : '';
   if (status === 403 || status === 401) {
@@ -172,9 +180,14 @@ export function explainChange(status, body) {
  */
 export const alreadyMember = (status, body) => (status === 400 || status === 409) && /already/i.test(errorText(body));
 
-/** Pure: the products a set of group changes actually freed (only groups that were left count). */
+/**
+ * Pure: the products a set of group changes actually freed. Only groups that
+ * were left count, and a product the user still holds through a group that
+ * was NOT left (refused, or no answer) is not freed.
+ */
 export function freedProductsFrom(changes, keptProducts = []) {
   const kept = new Set((keptProducts ?? []).map((k) => k.product));
+  for (const c of changes ?? []) if (!c.ok) for (const p of c.products ?? []) kept.add(p);
   const freed = new Set((changes ?? []).filter((c) => c.ok).flatMap((c) => c.products ?? []));
   return [...freed].filter((p) => !kept.has(p)).sort();
 }
@@ -199,10 +212,17 @@ async function bodyOf(res) {
 /** The user's groups right now, read as the admin: [{ id, name }]. Throws with a clear message. */
 export const fetchUserGroupsLive = (accountId) => fetchUserGroups(accountId, { asUser: true });
 
-/** Remove one user from the planned groups. Returns per-group results. */
+const retryAfterOf = (res) => Math.max(1, Number(res.headers?.get?.('Retry-After')) || 5);
+
+/**
+ * Remove one user from the planned groups. Returns per-group results. When
+ * Confluence asks for a pause (429) the remaining groups are not tried; each
+ * is returned as not done, with `rateLimited` and the wait it asked for.
+ */
 export async function removeFromGroups(accountId, groups) {
   const results = [];
-  for (const g of groups) {
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
     let res;
     try {
       res = await api
@@ -217,13 +237,22 @@ export async function removeFromGroups(accountId, groups) {
       results.push({ groupId: g.groupId, name: g.name, products: g.products, ok: false, unknown: true, error: NO_REPLY_MESSAGE });
       continue;
     }
+    if (res.status === 429) {
+      const retryAfter = retryAfterOf(res);
+      for (const rest of groups.slice(i)) {
+        results.push({ groupId: rest.groupId, name: rest.name, products: rest.products, ok: false, rateLimited: true, retryAfter, error: RATE_LIMITED_MESSAGE });
+      }
+      break;
+    }
     const ok = res.ok;
+    const body = ok ? null : await bodyOf(res);
     results.push({
       groupId: g.groupId,
       name: g.name,
       products: g.products,
       ok,
-      error: ok ? null : explainChange(res.status, await bodyOf(res)),
+      error: ok ? null : explainChange(res.status, body),
+      ...(!ok && isIdpManaged(res.status, body) ? { idpManaged: true } : {}),
     });
   }
   return results;
