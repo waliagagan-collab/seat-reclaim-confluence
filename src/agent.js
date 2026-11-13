@@ -10,6 +10,7 @@ import {
   listAnswer,
   historyLine,
   historyLimit,
+  logLine,
 } from './lib/agent.js';
 
 /**
@@ -28,7 +29,7 @@ const action = (fn) => async (payload, context) => {
   try {
     return await fn(payload ?? {}, context);
   } catch (err) {
-    console.error('agent action failed:', err?.message ?? String(err));
+    console.error('agent action failed:', logLine(err));
     return 'Seat Reclaim could not read its data just now. Try again in a minute, or open the app in Confluence administration → Settings → Apps.';
   }
 };

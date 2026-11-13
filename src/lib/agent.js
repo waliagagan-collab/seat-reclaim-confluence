@@ -167,5 +167,12 @@ export const historyLine = (e, name) => ({
   undoneBy: e.restoredBy ? name(e.restoredBy) : null,
 });
 
+/**
+ * Pure: what goes in the app's log when an action fails. Confluence's own
+ * detail (the part after the dash in the app's error text) can quote an
+ * account ID or a group name, so only the status and the endpoint are kept.
+ */
+export const logLine = (err) => String(err?.message ?? err).split(' — ')[0].slice(0, 200);
+
 export const historyLimit = (payload) =>
   Math.min(HISTORY_MAX, Math.max(1, Math.round(positive(payload?.limit) ?? HISTORY_DEFAULT)));

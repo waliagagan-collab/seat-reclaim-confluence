@@ -10,6 +10,7 @@ import {
   listAnswer,
   candidateLine,
   historyLine,
+  logLine,
   historyLimit,
   MAX_LIMIT,
 } from '../src/lib/agent.js';
@@ -142,3 +143,11 @@ test('the agent cannot change access: GET actions only, and no reclaim or undo c
   }
   assert.ok(!/required:\s*true/.test(manifest.split('rovo:agent:')[1].split('  function:')[0]));
 });
+
+test('the log line for a failed action keeps the status and the endpoint, not what Confluence quoted', () => {
+  const err = new Error('Confluence rejected the query (400) (/wiki/rest/api/user/bulk) — accountId 5b10ac8d82e05b22cc7d4ef5 is not valid');
+  assert.equal(logLine(err), 'Confluence rejected the query (400) (/wiki/rest/api/user/bulk)');
+  assert.equal(logLine(new Error('storage timed out')), 'storage timed out');
+  assert.equal(logLine('plain text'), 'plain text');
+});
+
