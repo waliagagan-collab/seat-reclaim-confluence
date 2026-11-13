@@ -1,6 +1,11 @@
-"""Seat Reclaim for Confluence logo and banners, in the License Audit family: navy tile, nine
-seats, one seat taken back (a green return arrow instead of License Audit's ring).
-Run: python3 build_assets.py  (writes PNGs next to this file)"""
+"""Seat Reclaim for Confluence banners in the first design: navy tile, nine seats, one seat
+taken back (a green return arrow).
+Run: python3 build_assets.py  (writes the two banner PNGs next to this file)
+
+The logo is no longer built here. Since 26 October 2026 the listing uses the chair icon;
+logo-144/512/1024.png in this folder are copies of app-icons/png/seat-reclaim-confluence-*.png.
+The banners still show the first design and are not on the listing. The second text line is
+wider than the banner and is cut off at the right edge: fix that before using one."""
 import math, os
 from PIL import Image, ImageDraw, ImageFont
 
@@ -74,8 +79,6 @@ def banner(w, h):
     return im.resize((w, h), Image.LANCZOS)
 
 
-for size in (144, 512, 1024):
-    logo(size).save(os.path.join(HERE, f'logo-{size}.png'))
 banner(1120, 548).save(os.path.join(HERE, 'banner-1120x548.png'))
 banner(1920, 1200).save(os.path.join(HERE, 'banner-1920x1200.png'))
 print('done')
