@@ -4,7 +4,7 @@
  * only on the Seat Reclaim page, after the admin confirms. No Forge imports,
  * so these rules run under plain Node tests.
  */
-import { yearlySaving } from './ui.js';
+import { INTERRUPTED_NOTE, yearlySaving } from './ui.js';
 
 export const PRODUCT = 'Confluence';
 export const DEFAULT_LIMIT = 25;
@@ -34,15 +34,20 @@ export function bandFloor(bucket) {
 export function statusOf(u) {
   if (u?.lastAction?.status === 'reclaimed') return 'reclaimed';
   // "blocked" as a last action: a try found the app cannot reclaim this
-  // person (their group is managed by an identity provider).
-  return u?.reclaimable && !u?.isProtected && u?.lastAction?.status !== 'blocked' ? 'ready' : 'blocked';
+  // person (their group is managed by an identity provider). "pending": a
+  // reclaim that got no answer; the page keeps the person out of a new
+  // reclaim until History has been checked, and so does the agent.
+  const last = u?.lastAction?.status;
+  return u?.reclaimable && !u?.isProtected && last !== 'blocked' && last !== 'pending' ? 'ready' : 'blocked';
 }
 
 /** Pure: why a blocked user is blocked, with the protected list applied. */
 export const blockReason = (u) =>
   u?.isProtected
     ? 'On your protected list.'
-    : ((u?.lastAction?.status === 'blocked' ? u.lastAction.reason : u?.reason) ?? 'Cannot be reclaimed.');
+    : u?.lastAction?.status === 'pending'
+      ? INTERRUPTED_NOTE
+      : ((u?.lastAction?.status === 'blocked' ? u.lastAction.reason : u?.reason) ?? 'Cannot be reclaimed.');
 
 const STATUS_WORDS = { ready: 'Ready to reclaim', blocked: "Can't reclaim", reclaimed: 'Already reclaimed' };
 
@@ -148,7 +153,7 @@ export function listAnswer(meta, opts, matching) {
   };
 }
 
-const ACTION_WORDS = { reclaimed: 'Reclaimed', partial: 'Partly reclaimed', failed: 'Failed', restored: 'Undone' };
+const ACTION_WORDS = { reclaimed: 'Reclaimed', partial: 'Partly reclaimed', pending: 'Interrupted', failed: 'Not done', restored: 'Undone' };
 
 /** Pure: one log entry as the agent shows it; `name` maps account IDs to display names. */
 export const historyLine = (e, name) => ({

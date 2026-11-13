@@ -134,6 +134,7 @@ test('reclaimed and interrupted rows cannot be ticked; a partly reclaimed one ca
   assert.equal(canSelect(row('reclaimed')), false);
   assert.equal(rowStatus(row('pending')).text, 'Interrupted');
   assert.equal(canSelect(row('pending')), false);
+  assert.match(rowNote(row('pending')), /interrupted\. Check the History tab/);
   assert.equal(canSelect(row('partial')), true);
   assert.equal(canSelect({ reclaimable: false, lastAction: null }), false);
   assert.equal(canSelect({ reclaimable: true, isProtected: true, lastAction: null }), false);
@@ -149,6 +150,10 @@ test('the export says "No" for a row the app cannot reclaim, with the reason the
   assert.equal(ready[can], 'Yes');
   assert.equal(blocked[can], 'No');
   assert.equal(blocked[reason], 'This group is managed by your identity provider.');
+  // An interrupted reclaim is not offered again until History has been checked.
+  const [, interrupted] = tableOf([{ ...base, lastAction: { id: 'x', status: 'pending' } }]);
+  assert.equal(interrupted[can], 'No');
+  assert.match(interrupted[reason], /interrupted/);
 });
 
 test('a row whose groups are read at reclaim time says so and can still be ticked', () => {

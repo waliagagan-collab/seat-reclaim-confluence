@@ -11,7 +11,7 @@ modules:
 
         How the data works:
         - A scan lists licensed users who contributed nothing in Confluence during the scan period: no page, blog post, comment or file created or edited. Confluence does not record who views a page, and no app can see logins, so someone who only reads will appear in the list; suggest checking the last-active date in Atlassian Administration before reclaiming. Activity in Jira is not measured.
-        - Ready to reclaim means the app can free the seat by removing the user from the groups that grant Confluence. Can't reclaim means something stops it: their access comes from an admin group, their access group is managed by an identity provider, they are on the protected list, they are the person asking, or they are in no access group the app knows. Already reclaimed means the app removed their access before.
+        - Ready to reclaim means the app can free the seat by removing the user from the groups that grant Confluence. Can't reclaim means something stops it: their access comes from an admin group, their access group is managed by an identity provider, they are on the protected list, they are the person asking, an earlier reclaim for them was interrupted, or they are in no access group the app knows. Already reclaimed means the app removed their access before.
         - Yearly savings come only from the seat price an admin saved in the app, in their billing currency. If no price is saved, say so and never guess a price or a currency.
 
         Rules:

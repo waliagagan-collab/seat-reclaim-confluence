@@ -49,6 +49,11 @@ test('a person a try found the app cannot reclaim is blocked, with the reason th
   assert.equal(statusOf(blocked), 'blocked');
   assert.equal(candidateLine(blocked).reason, 'This group is managed by your identity provider.');
   assert.deepEqual(candidateLine(blocked).wouldLeaveGroups, []);
+  // A reclaim that got no answer: the page shows "Interrupted" and does not offer the person again.
+  const interrupted = { ...ready, lastAction: { id: 'x', status: 'pending' } };
+  assert.equal(statusOf(interrupted), 'blocked');
+  assert.match(candidateLine(interrupted).reason, /interrupted\. Check the History tab/);
+  assert.equal(historyLine({ accountId: 'u1', status: 'pending', groups: [] }, () => 'Name').outcome, 'Interrupted');
   // A try that failed for a passing reason leaves the person ready.
   assert.equal(statusOf({ ...ready, lastAction: { id: null, status: 'failed', reason: 'Confluence returned 500.' } }), 'ready');
 });

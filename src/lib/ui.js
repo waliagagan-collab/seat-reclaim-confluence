@@ -139,8 +139,12 @@ export const canSelect = (u) =>
   u.lastAction?.status !== 'pending' &&
   u.lastAction?.status !== 'blocked';
 
+/** What the page, the export and the agent say about a reclaim that got no answer. */
+export const INTERRUPTED_NOTE = 'A reclaim for this person was interrupted. Check the History tab before trying again.';
+
 /** Pure: the small line under a row's status: why it can't be reclaimed, or what the last try said. */
 export function rowNote(u) {
+  if (u.lastAction?.status === 'pending') return INTERRUPTED_NOTE;
   if (u.lastAction?.status === 'blocked') return u.lastAction.reason ?? null;
   if (!u.reclaimable || u.pending) return u.reason ?? null;
   if (u.lastAction?.status === 'failed' && u.lastAction.reason) return `Last try: ${u.lastAction.reason}`;
