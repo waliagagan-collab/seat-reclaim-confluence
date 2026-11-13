@@ -332,7 +332,16 @@ async function userEditedSince(item, accountId, since) {
   let cursor = null;
   for (let page = 0; page < MAX_VERSION_PAGES; page++) {
     const params = searchParams({ limit: VERSION_PAGE, sort: '-modified-date', ...(cursor ? { cursor } : {}) });
-    const body = await getJson(route`/wiki/api/v2/${collection}/${item.id}/versions?${params}`);
+    let body;
+    try {
+      body = await getJson(route`/wiki/api/v2/${collection}/${item.id}/versions?${params}`);
+    } catch (err) {
+      // The page was deleted or moved between the search and this read. That
+      // is about one page, not the scan: the app cannot tell whether this
+      // person edited it, and says so.
+      if (err?.status === 404) return 'unknown';
+      throw err;
+    }
     const r = scanVersions(body?.results, accountId, since);
     if (r !== 'more') return r;
     cursor = nextCursor(body?._links?.next)?.cursor ?? null;
@@ -344,8 +353,8 @@ async function userEditedSince(item, accountId, since) {
 /**
  * true | false | 'unknown'. 'unknown' means the user touches more content than
  * the check can examine within budget, or a whiteboard or database someone
- * else changed last; the caller treats it as active, so a wrong name never
- * reaches the list.
+ * else changed last, or a page that was gone when its history was read; the
+ * caller treats it as active, so a wrong name never reaches the list.
  */
 export async function wasActiveWithin(accountId, days) {
   const since = windowStart(days);

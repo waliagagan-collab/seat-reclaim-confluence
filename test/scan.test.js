@@ -217,6 +217,25 @@ test('someone who contributed to a whiteboard another person changed last is not
   assert.ok(report.warnings.some((w) => /whiteboard or database/.test(w)));
 });
 
+test('a page that is gone when its history is read does not fail the scan: that person is counted as active', async () => {
+  site.contributed['u-idle'] = [item('page', 'p1', 'u-busy')];
+  site.once['GET /wiki/api/v2/pages/p1/versions'] = [{ status: 404, body: { message: 'Not found' } }];
+  await start();
+  await drain(server);
+  assert.equal(state().status, 'complete');
+  assert.deepEqual(await listed(), ['u-idle2']);
+  assert.equal((await status()).report.unverified, 1);
+});
+
+test('a history read refused for another reason still fails the scan with the reason', async () => {
+  site.contributed['u-idle'] = [item('page', 'p1', 'u-busy')];
+  site.once['GET /wiki/api/v2/pages/p1/versions'] = [{ status: 403, body: { message: 'Forbidden' } }];
+  await start();
+  await drain(server);
+  assert.equal(state().status, 'failed');
+  assert.match(state().error, /403/);
+});
+
 test('a cancel wins over a slice in flight, and its scratch data is removed', async () => {
   const run = await start();
   const slice = server.worker.handler(globalThis.__queue.shift()); // content, in flight
