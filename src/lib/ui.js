@@ -126,6 +126,13 @@ export function rowStatus(u) {
 }
 
 /**
+ * Pure: how many people on the list have had their seat reclaimed since the
+ * scan that built it. The counts and the yearly cost above the list come
+ * from the scan, so the page says when they no longer match.
+ */
+export const reclaimedCount = (rows) => (rows ?? []).filter((u) => u?.lastAction?.status === 'reclaimed').length;
+
+/**
  * Pure: can this row be ticked? A partly reclaimed user still has groups to
  * leave, so they stay selectable. An interrupted reclaim (no answer) is
  * sorted out from History first. 'blocked' is a try that found the app cannot

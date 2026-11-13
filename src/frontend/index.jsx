@@ -37,6 +37,7 @@ import {
   filterRows,
   fmtMoney,
   normaliseSeatCosts,
+  reclaimedCount,
   rowNote,
   rowStatus,
   scanProgress,
@@ -381,6 +382,7 @@ function AuditPanel({ gate, onChanged, version }) {
   const readyVisible = visible.filter(canSelect);
   const chosen = useMemo(() => rows.filter((u) => selected.has(u.accountId)), [rows, selected]);
   const chosenSaving = chosen.length ? yearlySaving({ [PRODUCT]: chosen.length }, { [PRODUCT]: liveCost }) : null;
+  const reclaimedNow = reclaimedCount(rows);
   const scan = scanProgress(state);
   const hasEmails = rows.some((r) => r.email);
   const scanAgeDays = report?.generatedAt ? Math.floor((Date.now() - Date.parse(report.generatedAt)) / 86_400_000) : 0;
@@ -580,6 +582,12 @@ function AuditPanel({ gate, onChanged, version }) {
               {report.totalUsers} licensed · {report.activeUsers} active · {report.days}-day window · scanned{' '}
               {fmtDate(report.generatedAt)}
             </Text>
+            {reclaimedNow > 0 && (
+              <Text>
+                {reclaimedNow === 1 ? '1 of these users has' : `${reclaimedNow} of these users have`} been reclaimed
+                since this scan. The figures here are from the scan; run a new one to update them.
+              </Text>
+            )}
             {report.dormantCount > 0 && saving === null && (
               <Text>Enter the yearly price of a seat below to see what these seats cost.</Text>
             )}

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { unzipSync, strFromU8 } from 'fflate';
-import { normaliseSeatCosts, yearlySaving, fmtMoney, filterRows, bandOptions, scanProgress, showReviewPrompt, rowStatus, canSelect, rowNote } from '../src/lib/ui.js';
+import { normaliseSeatCosts, yearlySaving, fmtMoney, filterRows, bandOptions, scanProgress, showReviewPrompt, rowStatus, canSelect, rowNote, reclaimedCount } from '../src/lib/ui.js';
 import { buildXlsx, columnName, xmlText, csvCell, toCsv } from '../src/frame/xlsx.js';
 import { loadFrame } from './helpers.js';
 
@@ -160,4 +160,11 @@ test('a row whose groups are read at reclaim time says so and can still be ticke
   const pending = { reclaimable: true, pending: true, isProtected: false, reason: "This person's groups weren't readable during the scan. They are read live when you reclaim.", lastAction: null };
   assert.equal(canSelect(pending), true);
   assert.match(rowNote(pending), /read live when you reclaim/);
+});
+
+test('the page counts the people reclaimed since the scan, so it can say the figures are from before', () => {
+  const row = (status) => ({ reclaimable: true, lastAction: status ? { status } : null });
+  assert.equal(reclaimedCount([row('reclaimed'), row('reclaimed'), row('partial'), row('restored'), row(null)]), 2);
+  assert.equal(reclaimedCount([]), 0);
+  assert.equal(reclaimedCount(undefined), 0);
 });
