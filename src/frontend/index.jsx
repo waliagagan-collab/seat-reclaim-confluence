@@ -134,14 +134,25 @@ const HowItWorks = ({ compact, onToggle }) =>
       <Stack space="space.100">
         <Text>
           Run a scan to find licensed users who <Strong>created or edited nothing in Confluence</Strong> in the period:
-          no page, blog post, comment or file. Every candidate is checked against all content the app can see. Confluence
-          does not record who <Strong>views</Strong> a page, so someone who only reads will appear here; if in doubt,
-          check their last-active date in Atlassian Administration. Then pick who to reclaim. The app takes them out
-          of the groups that grant Confluence, which frees the seat, and asks Confluence to confirm. Two kinds of
-          people are never reclaimed: Confluence administrators (anyone in a group that Confluence gives admin or
-          site admin permission, or in a group that grants Confluence and has "admin" in its name), and you. You can{' '}
-          <Strong>Protect</Strong> anyone else you want left alone. Nothing changes until you confirm; each person's
-          activity and groups are re-checked live first, and every change can be undone from the History tab.
+          no page, blog post, comment or file. Every candidate is checked against all content the app can see. If your
+          site blocks apps from a space, work done only there is not seen.
+        </Text>
+        <Text>
+          Confluence does not record who <Strong>views</Strong> a page, so someone who only reads will appear here. If
+          in doubt, check their last-active date in Atlassian Administration.
+        </Text>
+        <Text>
+          Then pick who to reclaim. The app takes them out of the groups that grant Confluence, which frees the seat,
+          and asks Confluence to confirm. Leaving a group also removes anything else that group grants.
+        </Text>
+        <Text>
+          Two kinds of people are never reclaimed: Confluence administrators (anyone in a group that Confluence gives
+          admin or site admin permission, or in a group that grants Confluence and has "admin" in its name), and you.
+          You can <Strong>Protect</Strong> anyone else you want left alone.
+        </Text>
+        <Text>
+          Nothing changes until you confirm. Each person's activity and groups are re-checked live first, and every
+          change can be undone from the History tab.
         </Text>
         {onToggle && (
           <Box>
