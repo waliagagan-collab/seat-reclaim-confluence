@@ -45,7 +45,17 @@ kept on the person's row instead. A group managed by an identity provider refuse
 time, so that row is marked "Can't reclaim".
 
 Someone who contributed to a whiteboard or database that another person changed last is
-counted as active: apps cannot read who edited those, so the app does not guess.
+counted as active: apps cannot read who edited those, so the app does not guess. The same
+goes for a page that is gone (404) when its version history is read: the scan carries on and
+that person is counted as active. Any other refusal on a history read still fails the scan
+with Confluence's message.
+
+A reclaim that got no answer shows as "Interrupted". The row, the export and the Rovo agent
+all treat that person as not ready until History has been checked (Undo there puts back every
+group that was planned).
+
+The check sees only content the app can see. If a site blocks apps from a space, work done
+only in that space is not seen, and the "How it works" panel says so.
 
 Confluence requires a **site admin** for group membership changes. A Confluence admin who is
 not a site admin can scan and review, and gets a clear message if they try to reclaim.

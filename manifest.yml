@@ -138,8 +138,8 @@ app:
 permissions:
   scopes:
     # Reading: who holds a seat, what they did, and which groups grant access.
-    - read:content-details:confluence # list the site's users (/search/user)
-    - read:confluence-user # profiles, a user's groups, and whether they can still use the site
+    - read:content-details:confluence # list the site's users, and ask whether an account can still use the site (/search/user)
+    - read:confluence-user # profiles, a user's groups, and whether the person on the page is an admin
     - read:confluence-groups # the groups that grant Confluence (by global permission)
     - search:confluence # content search by CQL
     - read:page:confluence # version history of a page (v2)
