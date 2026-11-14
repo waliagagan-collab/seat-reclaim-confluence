@@ -47,11 +47,13 @@ export async function loadServer() {
     });
     out[name] = await import(pathToFileURL(outfile).href);
   }
-  // The storage layer on its own, for tests of the log and the report, and
-  // where the app keeps account IDs, for the personal data report.
+  // The storage layer on its own, for tests of the log and the report; where
+  // the app keeps account IDs, and the hourly trigger of the personal data
+  // report.
   for (const [name, entry] of [
     ['store', 'src/lib/store.js'],
     ['personal', 'src/lib/personal-data.js'],
+    ['privacy', 'src/privacy.js'],
   ]) {
     const outfile = outFile(name);
     await build({

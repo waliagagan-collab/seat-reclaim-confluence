@@ -61,3 +61,24 @@ test('table cell keys are prefixed strings, so two cells in a row can never shar
   assert.ok(!/key:\s*[^,`'"\n]*\?\s*1\s*:\s*0\s*,/.test(ui), 'no bare 1/0 cell keys');
   assert.ok(!/key:\s*(u\.severity|p\.userCount|p\.numberOfSeats|report\.dormantByProduct)[^,`]*,/.test(ui), 'no bare numeric cell keys');
 });
+
+test('the personal data report runs from an hourly trigger, with the one new scope', async () => {
+  const { readFileSync } = await import('node:fs');
+  const manifest = readFileSync(new URL('../manifest.yml', import.meta.url), 'utf8');
+  const mod = await import('../src/privacy.js');
+  assert.equal(typeof mod.scheduled, 'function');
+  assert.match(manifest, /scheduledTrigger:\n(?:\s+#.*\n)*\s+- key: personal-data-report\n\s+function: personal-data\n\s+interval: hour/);
+  assert.match(manifest, /- key: personal-data\n\s+handler: privacy\.scheduled\n(?:\s+#.*\n)*\s+timeoutSeconds: 60/);
+  const scopes = [...manifest.split('scopes:')[1].matchAll(/^\s+- ([\w:.-]+)/gm)].map((m) => m[1]);
+  assert.deepEqual(scopes, [
+    'read:content-details:confluence',
+    'read:confluence-user',
+    'read:confluence-groups',
+    'search:confluence',
+    'read:page:confluence',
+    'read:blogpost:confluence',
+    'write:confluence-groups',
+    'storage:app',
+    'report:personal-data',
+  ]);
+});
