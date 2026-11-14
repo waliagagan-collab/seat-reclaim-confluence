@@ -44,8 +44,17 @@ export function makeSite() {
     canUse(accountId) {
       return Object.values(site.groups).some((g) => g.access && g.members.includes(accountId));
     },
+    // As Confluence lists them: "use" for everyone who holds a seat, and
+    // "administer" for members of an admin group or anyone given the admin
+    // role directly (`adminRole` in addUser's extra fields).
     asResult(accountId) {
-      return { user: { ...site.users[accountId], operations: [{ operation: 'use', targetType: 'application' }] } };
+      const { adminRole, ...user } = site.users[accountId];
+      const admin =
+        Boolean(adminRole) ||
+        Object.values(site.groups).some((g) => (g.access === 'admin' || g.access === 'site-admin') && g.members.includes(accountId));
+      const operations = [{ operation: 'use', targetType: 'application' }];
+      if (admin) operations.push({ operation: 'administer', targetType: 'application' });
+      return { user: { ...user, operations } };
     },
 
     handle(method, rawPath, body, as) {

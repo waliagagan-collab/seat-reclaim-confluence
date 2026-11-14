@@ -27,6 +27,7 @@ import {
   diagnose,
   fetchAccessGroups,
   canUseConfluence,
+  administersConfluence,
   countLicensedUsers,
   wasActiveWithin,
 } from './lib/confluence.js';
@@ -59,7 +60,7 @@ const IN_FLIGHT_MS = 60_000;
 export const ACCESS_GROUPS_BY_NAME_WARNING =
   "Confluence didn't let the app filter groups by permission, so the standard access groups were recognised by name. If your site grants Confluence through other groups, those users will show as can't reclaim.";
 export const ACCESS_GROUPS_UNREADABLE_WARNING =
-  'The app could not read which groups grant Confluence, so it cannot plan any reclaim from this scan. Reinstalling the app usually restores that permission.';
+  'The app could not read which groups grant Confluence, so it cannot plan any reclaim from this scan. Open Confluence → Settings → Manage apps and update Seat Reclaim if an update is offered, then run a new scan. Do not uninstall the app: a new install starts with an empty History, so nothing could be undone.';
 
 const licenseRefusal = (context) => {
   const gate = licenseGate(context?.license, context?.environmentType);
@@ -384,6 +385,24 @@ define('reclaim', async ({ payload, context }) => {
       });
       if (!plan.reclaimable) {
         results.push({ accountId, ok: false, skipped: true, error: reasonText(plan) });
+        continue;
+      }
+      // Groups are not the whole story: an admin role can be given to a person
+      // directly, or come through a group that grants no Confluence. Confluence
+      // answers for the person looked up, so it is asked about each one. An
+      // answer that cannot be had is never a reason to remove access.
+      let admin;
+      try {
+        admin = await administersConfluence(accountId, { asUser: true });
+      } catch (err) {
+        if (err?.rateLimited) throw err;
+        admin = null;
+      }
+      if (admin !== false) {
+        const reason = admin ? 'admin-role' : 'admin-unconfirmed';
+        // An admin stays an admin: the row stops being offered until a new scan.
+        if (admin) await noteRow(accountId, 'blocked', reasonText({ reclaimable: false, reason })).catch(() => {});
+        skip(accountId, reason);
         continue;
       }
       // The log entry is written BEFORE anything changes, as "pending", so a

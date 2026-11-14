@@ -147,8 +147,10 @@ const HowItWorks = ({ compact, onToggle }) =>
           and asks Confluence to confirm. Leaving a group also removes anything else that group grants.
         </Text>
         <Text>
-          Two kinds of people are never reclaimed: Confluence administrators (anyone in a group that Confluence gives
-          admin or site admin permission, or in a group that grants Confluence and has "admin" in its name), and you.
+          Two kinds of people are never reclaimed: Confluence administrators, and you. An administrator is anyone in a
+          group that Confluence gives admin or site admin permission, anyone in a group that grants Confluence and has
+          "admin" in its name, and anyone Confluence says can administer it, which is checked again just before each
+          reclaim.
           You can <Strong>Protect</Strong> anyone else you want left alone.
         </Text>
         <Text>
@@ -540,8 +542,8 @@ function AuditPanel({ gate, onChanged, version }) {
           {permissionFailure && checks && checks.length > 0 && (
             <Stack space="space.050">
               <Text>
-                <Strong>Permission check.</Strong> Reinstalling or updating the app from Manage apps re-grants every
-                permission it needs.
+                <Strong>Permission check.</Strong> Updating the app from Confluence → Settings → Manage apps grants every
+                permission it needs. Do not uninstall it: a new install starts with an empty History.
               </Text>
               {checks.map((c) => (
                 <Text key={c.name}>

@@ -118,7 +118,11 @@ export function reasonText(plan, { accessSource = 'permissions' } = {}) {
     case 'no-access-groups':
       return "Not in any group that grants Confluence. Their seat may already be free, or their access comes from a group the app can't see — check Atlassian Administration.";
     case 'no-role-data':
-      return "The app couldn't read which groups grant Confluence during the scan, so it can't plan a reclaim. Reinstalling the app usually restores that permission; then run a new scan.";
+      return "The app couldn't read which groups grant Confluence during the scan, so it can't plan a reclaim. Open Confluence → Settings → Manage apps and update Seat Reclaim if an update is offered, then run a new scan. Do not uninstall the app: a new install starts with an empty History, so nothing could be undone.";
+    case 'admin-role':
+      return 'Can administer Confluence (an admin role given directly or through a group). Remove their admin role in Atlassian Administration first.';
+    case 'admin-unconfirmed':
+      return 'Could not confirm that this person is not a Confluence admin, so their seat was left alone. Try again in a minute.';
     case 'groups-unknown':
       return "This person's groups weren't readable during the scan. They are read live when you reclaim.";
     case 'active-since-scan':

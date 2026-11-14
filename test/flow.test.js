@@ -152,6 +152,31 @@ test('a Confluence admin, the person running the reclaim and protected people ar
   assert.equal(site.removed.length, 0);
 });
 
+test('someone Confluence says can administer it is never reclaimed, even with no admin group', async () => {
+  site.addUser('u-role', ['g-users'], { adminRole: true }); // admin role given directly
+  await scan();
+  assert.equal((await rowsById())['u-role'].reclaimable, true, 'the groups alone offer them');
+  const res = await call(server, 'reclaim', { accountIds: ['u-role'] });
+  assert.equal(res.results[0].skipped, true);
+  assert.match(res.results[0].error, /Can administer Confluence/);
+  assert.equal(site.removed.length, 0);
+  assert.deepEqual(await entries(), []);
+  const row = (await rowsById())['u-role'];
+  assert.equal(row.lastAction.status, 'blocked', 'the row stops being offered');
+  assert.match(row.lastAction.reason, /Can administer Confluence/);
+});
+
+test('when the admin check gets no answer, the seat is left alone and can be tried again', async () => {
+  await scan();
+  site.once['GET /wiki/rest/api/search/user'] = [{ status: 500, body: { message: 'Internal error' } }];
+  const res = await call(server, 'reclaim', { accountIds: ['u-idle'] });
+  assert.match(res.results[0].error, /Could not confirm that this person is not a Confluence admin/);
+  assert.equal(site.removed.length, 0);
+  assert.equal((await rowsById())['u-idle'].lastAction, null, 'nothing is noted on the row');
+  const again = await call(server, 'reclaim', { accountIds: ['u-idle'] });
+  assert.equal(again.results[0].ok, true);
+});
+
 test('someone who contributed since the scan is skipped', async () => {
   await scan();
   site.lastCreated['u-idle'] = 0;

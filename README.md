@@ -25,6 +25,7 @@ retried for a few seconds) whether the account still holds a seat, because
 | Rule | Where |
 | --- | --- |
 | Never reclaim a Confluence administrator: anyone in a group that Confluence gives admin or site-admin permission, or in a group that grants Confluence and has "admin" in its name (`/admin/i`), is left alone | `planReclaim` |
+| Just before each reclaim, ask Confluence whether the person can administer it (the user search with `expand=operations` lists the operations of the person looked up, checked live on 14 Nov 2026). Anyone who can is left alone and their row is marked Can't reclaim; no answer means no change | `administersConfluence`, `reclaim` resolver |
 | Never act on the person running the app, or on the protected list | `protectedReasonFor` |
 | Act only on accounts on the current list | `getReportedIds`, `reclaim` resolver |
 | Re-check activity and re-read the user's groups live before acting; the scan is a snapshot | `reclaim` resolver |

@@ -46,7 +46,7 @@ function explain(status, body, path) {
   const detail = body?.message ? ` — ${body.message}` : '';
   const at = ` (${endpointOf(path)})`;
   if (status === 401 || status === 403) {
-    return `Confluence refused the request (${status})${at}. The app is probably missing a permission it was granted after install — reinstalling it re-grants the current scopes.${detail}`;
+    return `Confluence refused the request (${status})${at}. The app is probably missing a permission that came with an update. Open Confluence → Settings → Manage apps and update Seat Reclaim if an update is offered, then try again. Do not uninstall the app: a new install starts with an empty History, so nothing could be undone.${detail}`;
   }
   if (status === 400) return `Confluence rejected the query (400)${at}${detail}`;
   return `Confluence returned ${status}${at}${detail}`;
@@ -611,13 +611,42 @@ export function seatHeldInSearch(results, accountId) {
  * (and Atlassian's count) already drop it.
  */
 export async function canUseConfluence(accountId, { asUser = true } = {}) {
-  const params = searchParams({
+  const body = await getJson(route`/wiki/rest/api/search/user?${oneUserParams(accountId)}`, { asUser });
+  return seatHeldInSearch(body?.results, accountId);
+}
+
+const oneUserParams = (accountId) =>
+  searchParams({
     cql: `type = user and user.accountid = ${quote(accountId)}`,
     limit: 5,
     expand: 'operations',
   });
-  const body = await getJson(route`/wiki/rest/api/search/user?${params}`, { asUser });
-  return seatHeldInSearch(body?.results, accountId);
+
+/**
+ * Pure: from the same search, may this account administer Confluence?
+ * true | false | null (null: the account came back without its operations).
+ * The operations are those of the account looked up, not of the admin asking:
+ * checked on a live site on 14 Nov 2026, where a site admin looking up an
+ * ordinary account got "use" without "administer". An account the search no
+ * longer returns holds no seat here, so it is not an admin of this site.
+ */
+export function administersInSearch(results, accountId) {
+  if (!Array.isArray(results)) return null;
+  const u = results.map((r) => r?.user ?? r).find((x) => x?.accountId === accountId);
+  if (!u) return false;
+  if (!Array.isArray(u.operations)) return null;
+  return u.operations.some((o) => o?.operation === 'administer' && o?.targetType === 'application');
+}
+
+/**
+ * May this account administer Confluence right now? true | false | null.
+ * Asked just before a reclaim: an admin role can be given to a person
+ * directly, or come through a group that grants no Confluence seat, and the
+ * groups alone would miss both.
+ */
+export async function administersConfluence(accountId, { asUser = true } = {}) {
+  const body = await getJson(route`/wiki/rest/api/search/user?${oneUserParams(accountId)}`, { asUser });
+  return administersInSearch(body?.results, accountId);
 }
 
 const COUNT_PAGES = 15; // 3,000 accounts; beyond that the count is reported as partial
