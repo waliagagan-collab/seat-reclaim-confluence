@@ -49,11 +49,12 @@ export async function loadServer() {
   }
   // The storage layer on its own, for tests of the log and the report; where
   // the app keeps account IDs, and the hourly trigger of the personal data
-  // report.
+  // report; the Rovo agent's actions.
   for (const [name, entry] of [
     ['store', 'src/lib/store.js'],
     ['personal', 'src/lib/personal-data.js'],
     ['privacy', 'src/privacy.js'],
+    ['agent', 'src/agent.js'],
   ]) {
     const outfile = outFile(name);
     await build({

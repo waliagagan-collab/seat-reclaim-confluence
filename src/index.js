@@ -34,7 +34,7 @@ import {
 } from './lib/confluence.js';
 import { adminOnly } from './lib/admin.js';
 import { normaliseDays, isStale, licenseGate, licenseMessage } from './lib/scan.js';
-import { normaliseSeatCosts } from './lib/ui.js';
+import { normaliseSeatCosts, notListed, CLOSED_ACCOUNT_NAME } from './lib/ui.js';
 import { decorate, protectedReasonFor } from './lib/decorate.js';
 import { planReclaim, reasonText, fetchUserGroupsLive, removeFromGroups, addToGroups, freedProductsFrom } from './lib/reclaim.js';
 
@@ -244,11 +244,16 @@ define('getPage', async ({ payload, context }) => {
   return { ok: true, index, rows: await decorate(await getReportPage(index), context) };
 });
 
-define('getAllRows', async ({ context }) => ({
-  ok: true,
-  rows: await decorate(await getAllReportRows(EXPORT_LIMIT), context),
-  limit: EXPORT_LIMIT,
-}));
+define('getAllRows', async ({ context }) => {
+  const [meta, rows] = await Promise.all([getReportMeta(), getAllReportRows(EXPORT_LIMIT)]);
+  return {
+    ok: true,
+    rows: await decorate(rows, context),
+    limit: EXPORT_LIMIT,
+    // Users the scan counted whose rows went when their accounts were closed.
+    notListed: notListed(meta?.dormantCount, rows.length, EXPORT_LIMIT),
+  };
+});
 
 define('diagnose', async () => ({ ok: true, checks: await diagnose() }));
 
@@ -616,8 +621,9 @@ define('getHistory', async ({ payload }) => {
     entries: entries.map((e) => ({
       ...e,
       displayName: name(e.accountId),
-      byName: name(e.by),
-      restoredByName: name(e.restoredBy),
+      // An admin whose account was closed: the personal data report cleared the ID.
+      byName: e.byClosed ? CLOSED_ACCOUNT_NAME : name(e.by),
+      restoredByName: e.restoredByClosed ? CLOSED_ACCOUNT_NAME : name(e.restoredBy),
     })),
   };
 });

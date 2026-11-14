@@ -40,6 +40,17 @@ export const tableOf = (rows) => [
   ]),
 ];
 
+/**
+ * Pure: what a download says about users the scan counted whose rows went
+ * because their accounts were closed (the weekly personal data report).
+ */
+export const notListedNote = (n) => {
+  if (!(n > 0)) return '';
+  return n === 1
+    ? ' 1 user counted in the scan is not in the download: their Atlassian account was closed.'
+    : ` ${n} users counted in the scan are not in the download: their Atlassian accounts were closed.`;
+};
+
 const today = () => new Date().toISOString().slice(0, 10);
 
 function offerDownload(blob, filename) {
@@ -66,12 +77,13 @@ async function refreshCount() {
   }
 }
 
-async function loadTable() {
+/** Every row through the resolver, as the download writes it. */
+export async function loadTable() {
   const res = await invoke('getAllRows');
   if (res?.forbidden) throw new Error(res.error);
   const rows = res?.rows ?? [];
   const capped = res?.limit && rows.length >= res.limit ? ` (capped at ${res.limit})` : '';
-  return { table: tableOf(rows), count: rows.length, capped };
+  return { table: tableOf(rows), count: rows.length, capped, note: notListedNote(res?.notListed) };
 }
 
 async function download(kind) {
@@ -79,19 +91,19 @@ async function download(kind) {
   buttons.forEach((b) => (b.disabled = true));
   $('status').textContent = 'Preparing…';
   try {
-    const { table, count, capped } = await loadTable();
+    const { table, count, capped, note } = await loadTable();
     if (kind === 'xlsx') {
       const blob = new Blob([buildXlsx(table, 'Inactive users')], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
       offerDownload(blob, `seat-reclaim-confluence-${today()}.xlsx`);
-      $('status').textContent = `${count} rows${capped}.`;
+      $('status').textContent = `${count} rows${capped}.${note}`;
       return;
     }
     const text = toCsv(table);
     // The BOM makes Excel open the CSV as UTF-8 without an import wizard.
     offerDownload(new Blob(['﻿' + text], { type: 'text/csv;charset=utf-8' }), `seat-reclaim-confluence-${today()}.csv`);
-    $('status').textContent = `${count} rows${capped}. If nothing downloaded, use “Copy CSV” instead.`;
+    $('status').textContent = `${count} rows${capped}.${note} If nothing downloaded, use “Copy CSV” instead.`;
     $('copy').hidden = false;
     $('copy').onclick = async () => {
       try {

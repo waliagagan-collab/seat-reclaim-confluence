@@ -11,6 +11,7 @@ import {
   historyLine,
   historyLimit,
   logLine,
+  closedAccounts,
 } from './lib/agent.js';
 
 /**
@@ -48,7 +49,7 @@ export const getReclaimSummary = action(async (payload, context) => {
     getAllReportRows(ROW_LIMIT).then((r) => decorate(r, caller(payload, context))),
     getSettings(),
   ]);
-  return reclaimSummary(meta, rows, settings);
+  return { ...reclaimSummary(meta, rows, settings), ...closedAccounts(meta, rows.length, ROW_LIMIT) };
 });
 
 export const listReclaimCandidates = action(async (payload, context) => {
@@ -56,7 +57,7 @@ export const listReclaimCandidates = action(async (payload, context) => {
   if (!meta) return NO_REPORT;
   const opts = listOptions(payload);
   const rows = await decorate(await getAllReportRows(ROW_LIMIT), caller(payload, context));
-  return listAnswer(meta, opts, filterCandidates(rows, opts));
+  return { ...listAnswer(meta, opts, filterCandidates(rows, opts)), ...closedAccounts(meta, rows.length, ROW_LIMIT) };
 });
 
 export const getReclaimHistory = action(async (payload) => {

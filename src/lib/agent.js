@@ -4,7 +4,7 @@
  * only on the Seat Reclaim page, after the admin confirms. No Forge imports,
  * so these rules run under plain Node tests.
  */
-import { INTERRUPTED_NOTE, yearlySaving } from './ui.js';
+import { INTERRUPTED_NOTE, yearlySaving, notListed, CLOSED_ACCOUNT_NAME } from './ui.js';
 
 export const PRODUCT = 'Confluence';
 export const DEFAULT_LIMIT = 25;
@@ -153,18 +153,35 @@ export function listAnswer(meta, opts, matching) {
   };
 }
 
+/**
+ * Pure: what to say when users the scan counted are no longer on its list
+ * because their accounts were closed. `rowsRead` is how many rows the agent
+ * read, at most `limit`.
+ */
+export function closedAccounts(meta, rowsRead, limit) {
+  const n = notListed(meta?.dormantCount, rowsRead, limit);
+  if (!n) return {};
+  return {
+    closedAccountsNote: `${n} of the ${meta.dormantCount} inactive users this scan counted ${n === 1 ? 'is' : 'are'} no longer listed, because ${n === 1 ? 'that Atlassian account was' : 'those Atlassian accounts were'} closed. The totals on the page are as the scan counted them; the next scan counts again.`,
+  };
+}
+
 const ACTION_WORDS = { reclaimed: 'Reclaimed', partial: 'Partly reclaimed', pending: 'Interrupted', failed: 'Not done', restored: 'Undone' };
 
-/** Pure: one log entry as the agent shows it; `name` maps account IDs to display names. */
+/**
+ * Pure: one log entry as the agent shows it; `name` maps account IDs to
+ * display names. An admin whose account was closed has no ID left in the
+ * entry, only the mark the personal data report set.
+ */
 export const historyLine = (e, name) => ({
   user: name(e.accountId),
   outcome: ACTION_WORDS[e.status] ?? e.status ?? null,
   at: e.at ?? null,
-  by: name(e.by),
+  by: e.byClosed ? CLOSED_ACCOUNT_NAME : name(e.by),
   groupsLeft: (e.groups ?? []).filter((g) => g.ok).map((g) => g.name),
   confluenceConfirmedSeatFree: e.seatFreed === true ? true : e.seatFreed === false ? false : null,
   undoneAt: e.restoredAt ?? null,
-  undoneBy: e.restoredBy ? name(e.restoredBy) : null,
+  undoneBy: e.restoredByClosed ? CLOSED_ACCOUNT_NAME : e.restoredBy ? name(e.restoredBy) : null,
 });
 
 /**

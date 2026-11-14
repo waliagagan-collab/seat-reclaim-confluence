@@ -37,6 +37,7 @@ import {
   filterRows,
   fmtMoney,
   normaliseSeatCosts,
+  notListedText,
   reclaimedCount,
   rowNote,
   rowStatus,
@@ -187,6 +188,7 @@ function AuditPanel({ gate, onChanged, version }) {
   const [status, setStatus] = useState(null);
   const [rows, setRows] = useState([]);
   const [rowsLimit, setRowsLimit] = useState(null);
+  const [notListedCount, setNotListedCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
   const [selected, setSelected] = useState(() => new Set());
@@ -270,6 +272,7 @@ function AuditPanel({ gate, onChanged, version }) {
       const res = await invoke('getAllRows');
       setRows(res?.rows ?? []);
       setRowsLimit(res?.limit ?? null);
+      setNotListedCount(res?.notListed ?? 0);
     } catch (err) {
       setMessage(`Could not load the list: ${err?.message ?? 'no response'}.`);
     }
@@ -590,6 +593,7 @@ function AuditPanel({ gate, onChanged, version }) {
                 since this scan. The figures here are from the scan; run a new one to update them.
               </Text>
             )}
+            {notListedCount > 0 && <Text>{notListedText(notListedCount)}</Text>}
             {report.dormantCount > 0 && saving === null && (
               <Text>Enter the yearly price of a seat below to see what these seats cost.</Text>
             )}
@@ -988,7 +992,7 @@ function HistoryPanel({ version, onChanged }) {
     <Stack space="space.200">
       <Text>
         Every reclaim, who approved it and which groups each person left. Undo puts the person back in exactly those
-        groups.
+        groups. An entry about a person whose Atlassian account was closed is removed.
       </Text>
       {message && (
         <SectionMessage appearance="warning">

@@ -157,3 +157,31 @@ export function rowNote(u) {
   if (u.lastAction?.status === 'failed' && u.lastAction.reason) return `Last try: ${u.lastAction.reason}`;
   return null;
 }
+
+/**
+ * Pure: how many users the scan counted are no longer on its list. The
+ * weekly personal data report takes out the row of an account Atlassian says
+ * was closed, and leaves the totals as the scan counted them. `limit` is the
+ * most rows that were read: a list cut there says nothing.
+ */
+export function notListed(dormantCount, rowsRead, limit = null) {
+  const read = Number(rowsRead) || 0;
+  const gap = (Number(dormantCount) || 0) - read;
+  if (!(gap > 0) || (limit !== null && read >= limit)) return 0;
+  return gap;
+}
+
+/** Pure: what the page says about users no longer listed. */
+export function notListedText(n) {
+  if (!(n > 0)) return '';
+  return n === 1
+    ? '1 user counted in this scan is no longer listed: their Atlassian account was closed. The totals are from the scan; the next scan counts again.'
+    : `${n} users counted in this scan are no longer listed: their Atlassian accounts were closed. The totals are from the scan; the next scan counts again.`;
+}
+
+/**
+ * What History and the Rovo agent show for an admin whose Atlassian account
+ * was closed: the weekly personal data report cleared their account ID from
+ * the entry and marked it (byClosed, restoredByClosed).
+ */
+export const CLOSED_ACCOUNT_NAME = 'Closed account';

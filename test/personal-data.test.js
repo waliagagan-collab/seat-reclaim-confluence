@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { makeSite, item } from './fakes/confluence-site.js';
 import { kvs, WhereConditions } from './fakes/forge-kvs.js';
 import { privacy } from './fakes/forge-api.js';
-import { loadServer, reset, drain, call, stored } from './helpers.js';
+import { loadServer, loadFrame, reset, drain, call, stored } from './helpers.js';
 import { runSlice, kvsStore } from '../src/lib/privacy.js';
 
 /**
@@ -243,6 +243,71 @@ test('closed accounts are erased everywhere; the others stay, and the totals alr
   assert.equal(stored('scan:state').status, 'complete');
   assert.equal(stored('report:meta').dormantCount, 1);
   assert.deepEqual(listed(), [BOB]);
+});
+
+test('after the report, the page, the download, History and the Rovo agent read what is left, and keep the totals', async () => {
+  await scan();
+  await reclaim(ALICE, ADMIN);
+  const second = await reclaim(BOB, OTHER_ADMIN);
+  assert.equal((await call(server, 'undo', { entryId: second.entryId }, ADMIN)).ok, true);
+  actionsOver();
+  globalThis.__closed = [ALICE, ADMIN];
+  await runReport();
+  const me = { principal: { accountId: OTHER_ADMIN } };
+
+  // The page: two rows of the three, and the sentence about the closed account.
+  const list = await call(server, 'getAllRows', {}, OTHER_ADMIN);
+  assert.equal(list.ok, true);
+  assert.deepEqual(list.rows.map((r) => r.accountId).sort(), [BOB, DAN]);
+  assert.equal(list.notListed, 1);
+  assert.deepEqual((await call(server, 'getPage', { index: 0 }, OTHER_ADMIN)).rows.map((r) => r.accountId).sort(), [BOB, DAN]);
+  const status = await call(server, 'getStatus', {}, OTHER_ADMIN);
+  assert.equal(status.report.dormantCount, 3, 'the totals stay as the scan counted them');
+  assert.equal(status.report.totalUsers, 6);
+
+  // History: Alice's entry is gone; the closed admin who undid Bob's reads "Closed account".
+  const history = await call(server, 'getHistory', { page: 0 }, OTHER_ADMIN);
+  assert.equal(history.total, 1);
+  assert.equal(history.entries[0].displayName, `Name ${BOB}`);
+  assert.equal(history.entries[0].byName, `Name ${OTHER_ADMIN}`);
+  assert.equal(history.entries[0].restoredByName, 'Closed account');
+
+  // The download reads the same resolver.
+  globalThis.__invoke = (key, payload) => call(server, key, payload, OTHER_ADMIN);
+  const frame = await loadFrame();
+  const download = await frame.loadTable();
+  assert.equal(download.count, 2);
+  assert.equal(download.table.length, 3, 'the header and two rows');
+  assert.equal(download.note, ' 1 user counted in the scan is not in the download: their Atlassian account was closed.');
+
+  // The agent: the rows left, a note to pass on, and History with the closed admin.
+  const summary = await server.agent.getReclaimSummary({}, me);
+  assert.equal(summary.inactiveUsers, 2);
+  assert.equal(summary.licensedUsers, 6);
+  assert.match(summary.closedAccountsNote, /^1 of the 3 inactive users this scan counted is no longer listed, because that Atlassian account was closed\./);
+  const candidates = await server.agent.listReclaimCandidates({ search: 'Name' }, me);
+  assert.equal(candidates.matchingUsers, 2);
+  assert.match(candidates.closedAccountsNote, /no longer listed/);
+  const actions = await server.agent.getReclaimHistory({}, me);
+  assert.equal(actions.totalActions, 1);
+  assert.equal(actions.actions[0].by, `Name ${OTHER_ADMIN}`);
+  assert.equal(actions.actions[0].undoneBy, 'Closed account');
+
+  // Every row the list had is gone: the page, the download and the agent still work.
+  globalThis.__closed = [BOB, DAN];
+  globalThis.__kvs.set('pdr:state', { phase: 'idle', last: null });
+  await runReport();
+  const empty = await call(server, 'getAllRows', {}, OTHER_ADMIN);
+  assert.deepEqual(empty.rows, []);
+  assert.equal(empty.notListed, 3);
+  assert.equal((await frame.loadTable()).count, 0);
+  assert.match((await server.agent.listReclaimCandidates({}, me)).closedAccountsNote, /^3 of the 3 inactive users/);
+  assert.equal(typeof (await server.agent.getReclaimHistory({}, me)), 'string', 'an empty History is a sentence');
+  assert.equal((await call(server, 'getHistory', { page: 0 }, OTHER_ADMIN)).total, 0);
+  // A closed account is no longer on the list, so it cannot be reclaimed.
+  const refused = await call(server, 'reclaim', { accountIds: [BOB] }, OTHER_ADMIN);
+  assert.equal(refused.results[0].skipped, true);
+  assert.match(refused.results[0].error, /Not on the current list/);
 });
 
 test('no closed account: nothing changes but the report state', async () => {

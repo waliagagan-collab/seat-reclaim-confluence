@@ -12,6 +12,7 @@ import {
   historyLine,
   logLine,
   historyLimit,
+  closedAccounts,
   MAX_LIMIT,
 } from '../src/lib/agent.js';
 
@@ -125,6 +126,26 @@ test('history lines name people, say whether Confluence confirmed the seat, and 
   assert.equal(historyLine({ accountId: 'u1', status: 'reclaimed', seatFreed: null, groups: [] }, name).confluenceConfirmedSeatFree, null);
   assert.equal(historyLimit({}), 10);
   assert.equal(historyLimit({ limit: 500 }), 25);
+});
+
+test('the agent says when users the scan counted are gone because their accounts were closed', () => {
+  assert.deepEqual(closedAccounts({ dormantCount: 3 }, 3, 5000), {});
+  assert.deepEqual(closedAccounts({ dormantCount: 6200 }, 5000, 5000), {}, 'a list cut at the limit says nothing');
+  assert.equal(
+    closedAccounts({ dormantCount: 3 }, 2, 5000).closedAccountsNote,
+    '1 of the 3 inactive users this scan counted is no longer listed, because that Atlassian account was closed. The totals on the page are as the scan counted them; the next scan counts again.'
+  );
+  assert.match(closedAccounts({ dormantCount: 3 }, 0, 5000).closedAccountsNote, /^3 of the 3 inactive users this scan counted are no longer listed, because those Atlassian accounts were closed/);
+  assert.match(manifest, /closedAccountsNote, pass it on/, 'the agent is told to pass it on');
+});
+
+test('a History line names an admin whose account was closed as "Closed account"', () => {
+  const name = (id) => (id ? 'Someone' : null);
+  const h = historyLine({ accountId: 'u1', by: null, byClosed: true, status: 'restored', restoredBy: null, restoredByClosed: true, restoredAt: 't2', groups: [] }, name);
+  assert.equal(h.by, 'Closed account');
+  assert.equal(h.undoneBy, 'Closed account');
+  assert.equal(historyLine({ accountId: 'u1', by: 'me', status: 'reclaimed', groups: [] }, name).undoneBy, null);
+  assert.equal(historyLine({ accountId: 'u1', by: 'me', status: 'reclaimed', groups: [] }, name).by, 'Someone');
 });
 
 test('the agent entry point loads and exports every handler the manifest names', async () => {
