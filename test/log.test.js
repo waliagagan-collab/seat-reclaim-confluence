@@ -119,3 +119,49 @@ test('an entry that changed nothing can be taken back out of the log', async () 
   assert.equal(page.total, 1);
   assert.equal(await store.getEntry(pending.id), undefined);
 });
+
+test('History still pages correctly after entries in the middle are taken out, and keeps growing after', async () => {
+  const { store } = server;
+  for (let n = 0; n < 1200; n++) await store.saveEntry(entry(n));
+  // The newest ids hold 1199..750; archive page 2 holds 749..500, page 1 499..250, page 0 249..0.
+  assert.deepEqual(stored('log:index:meta'), { archives: 3 });
+  const before = (await allListed(store)).ids;
+  // From the middle of an archive page, the oldest of all, the newest ids, and a whole archive page.
+  const gone = new Set([entry(600).id, entry(0).id, entry(1000).id]);
+  for (let n = 250; n < 500; n++) gone.add(entry(n).id);
+  for (const id of gone) assert.equal(await store.removeFromHistory(id), 1, id);
+  assert.equal(await store.removeFromHistory(entry(600).id), 0, 'already out');
+  assert.deepEqual(stored('log:index:meta'), { archives: 3, sizes: [249, 0, 249] });
+
+  const check = async (expected) => {
+    const { ids, total } = await allListed(store);
+    assert.equal(total, expected.length);
+    assert.deepEqual(ids, expected, 'every entry left, once, newest first');
+    const first = await store.getLogPage(0, 25);
+    for (let p = 0; p < first.pages; p++) {
+      const { entries } = await store.getLogPage(p, 25);
+      assert.equal(entries.length, p < first.pages - 1 ? 25 : expected.length - 25 * (first.pages - 1), `page ${p} is full`);
+    }
+  };
+  const left = before.filter((id) => !gone.has(id));
+  assert.equal(left.length, 1200 - 253);
+  await check(left);
+  // The History tab reads the same pages.
+  const tab = await call(server, 'getHistory', { page: 20 });
+  assert.equal(tab.total, left.length);
+  assert.deepEqual(tab.entries.map((e) => e.id), left.slice(500, 525));
+
+  // New actions move older ids into new full pages; the shorter ones keep their sizes.
+  for (let n = 1200; n < 1500; n++) await store.saveEntry(entry(n));
+  const meta = stored('log:index:meta');
+  assert.deepEqual(meta.sizes.slice(0, 3), [249, 0, 249]);
+  assert.ok(meta.sizes.slice(3).every((s) => s === 250) && meta.archives === meta.sizes.length);
+  const newer = Array.from({ length: 300 }, (_, i) => entry(1499 - i).id);
+  await check([...newer, ...left]);
+
+  // A call that died before it wrote the count: the next one puts it right.
+  globalThis.__kvs.set('log:index:meta', { archives: meta.archives });
+  assert.equal(await store.removeFromHistory('not-there'), 0);
+  assert.deepEqual(stored('log:index:meta'), meta);
+  await check([...newer, ...left]);
+});

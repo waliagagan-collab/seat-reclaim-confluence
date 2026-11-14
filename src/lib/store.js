@@ -258,7 +258,10 @@ export async function setProtected(accountId, on, by) {
 // The index of actions, newest first. `log:index` holds the newest ones. When
 // it grows past HEAD_MAX the oldest ids move, ARCHIVE_SIZE at a time, to
 // numbered archive pages (a higher number is a newer page). Nothing is ever
-// dropped: a reclaim must stay in History, with its Undo, for good.
+// dropped: a reclaim must stay in History, with its Undo, for good. The one
+// exception is the entry of a person whose Atlassian account was closed: the
+// weekly personal data report takes it out (removeFromHistory), and the page
+// that held it is one id shorter from then on.
 const LOG_INDEX = 'log:index';
 const LOG_INDEX_META = 'log:index:meta';
 const HEAD_MAX = 500;
@@ -267,6 +270,17 @@ const RECENT_MS = 2 * 60 * 1000;
 const archiveKey = (n) => `log:index:${n}`;
 const logEntryKey = (id) => `log:entry:${id}`;
 const latestKey = (s) => `log:latest:${s}`;
+
+/**
+ * Pure: how many ids each archive page holds, oldest page first. A page is
+ * written with ARCHIVE_SIZE ids; `sizes` is kept only once one holds fewer.
+ */
+export const archiveSizes = (meta) =>
+  Array.from({ length: meta?.archives ?? 0 }, (_, n) =>
+    Number.isInteger(meta?.sizes?.[n]) && meta.sizes[n] >= 0 ? meta.sizes[n] : ARCHIVE_SIZE
+  );
+const indexMeta = (sizes) =>
+  sizes.every((s) => s === ARCHIVE_SIZE) ? { archives: sizes.length } : { archives: sizes.length, sizes };
 
 export const newEntryId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -303,14 +317,48 @@ async function addToIndex(id) {
   if (index.length > HEAD_MAX) {
     // The archive pages are written first, then their count, then the shorter
     // head: a call that dies in between repeats ids, it never loses them.
-    let archives = ((await kvs.get(LOG_INDEX_META)) ?? {}).archives ?? 0;
+    const sizes = archiveSizes(await kvs.get(LOG_INDEX_META));
     while (index.length > HEAD_MAX) {
-      await kvs.set(archiveKey(archives), index.splice(index.length - ARCHIVE_SIZE));
-      archives += 1;
+      await kvs.set(archiveKey(sizes.length), index.splice(index.length - ARCHIVE_SIZE));
+      sizes.push(ARCHIVE_SIZE);
     }
-    await kvs.set(LOG_INDEX_META, { archives });
+    await kvs.set(LOG_INDEX_META, indexMeta(sizes));
   }
   await kvs.set(LOG_INDEX, index);
+}
+
+/**
+ * Take an entry's id out of History's index: out of the newest ids and out
+ * of every archive page, since a call that died part way can have left an id
+ * in two places. The pages are written first, then the count, with each
+ * page's size read from the page itself, so whatever a call that died in
+ * between left is put right by the next one. The weekly personal data report
+ * calls this before it deletes the entry of a closed account. Returns how
+ * many copies went.
+ */
+export async function removeFromHistory(id) {
+  let removed = 0;
+  const index = (await kvs.get(LOG_INDEX)) ?? [];
+  const kept = index.filter((x) => x !== id);
+  if (kept.length !== index.length) {
+    removed += index.length - kept.length;
+    await kvs.set(LOG_INDEX, kept);
+  }
+  const meta = (await kvs.get(LOG_INDEX_META)) ?? {};
+  if (!meta.archives) return removed;
+  const sizes = [];
+  for (let n = 0; n < meta.archives; n++) {
+    const page = (await kvs.get(archiveKey(n))) ?? [];
+    const left = page.filter((x) => x !== id);
+    if (left.length !== page.length) {
+      removed += page.length - left.length;
+      await kvs.set(archiveKey(n), left);
+    }
+    sizes.push(left.length);
+  }
+  const next = indexMeta(sizes);
+  if (JSON.stringify(next) !== JSON.stringify(meta)) await kvs.set(LOG_INDEX_META, next);
+  return removed;
 }
 
 /**
@@ -346,8 +394,8 @@ export const getEntry = (id) => kvs.get(logEntryKey(id));
 
 export async function getLogPage(page, size = 25) {
   const index = (await kvs.get(LOG_INDEX)) ?? [];
-  const archives = ((await kvs.get(LOG_INDEX_META)) ?? {}).archives ?? 0;
-  const total = index.length + archives * ARCHIVE_SIZE;
+  const sizes = archiveSizes(await kvs.get(LOG_INDEX_META));
+  const total = index.length + sizes.reduce((a, b) => a + b, 0);
   const from = Math.floor(page) * size;
   const ids = [];
   const pagesRead = new Map();
@@ -357,10 +405,14 @@ export async function getLogPage(page, size = 25) {
       continue;
     }
     // Past the newest ids: archive pages, newest page first.
-    const offset = i - index.length;
-    const n = archives - 1 - Math.floor(offset / ARCHIVE_SIZE);
+    let offset = i - index.length;
+    let n = sizes.length - 1;
+    while (n > 0 && offset >= sizes[n]) {
+      offset -= sizes[n];
+      n -= 1;
+    }
     if (!pagesRead.has(n)) pagesRead.set(n, (await kvs.get(archiveKey(n))) ?? []);
-    ids.push(pagesRead.get(n)[offset % ARCHIVE_SIZE]);
+    ids.push(pagesRead.get(n)[offset]);
   }
   const entries = [];
   for (const id of ids) {
