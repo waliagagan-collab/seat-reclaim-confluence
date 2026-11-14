@@ -184,3 +184,18 @@ Two rows change, so that each call is under the scope that covers it:
 ### Pricing
 
 No change proposed. The table above matches the live prices (free up to 10 users; $300 a year at 50 users).
+
+---
+
+## Personal data reporting (14 Nov 2026)
+
+The app now reports the account IDs it keeps to Atlassian once a week and erases those of closed accounts (scope `report:personal-data`, hourly scheduled trigger; details in the README and in `privacy-security.md`). Deployed to development only. Nothing below has been entered on the Marketplace.
+
+- **The next production deploy is a major version.** The new scope makes it one (Forge lint: "major version upgrade ... scope modification"). Customers approve the new scope when they update. Make the Marketplace version for that major version after the deploy.
+- **Privacy & Security tab:**
+  - "Does your app store personal data?": **Yes** (it stores Atlassian account IDs), and tick the Personal Data Reporting API acknowledgment: the app calls it. The public API reported `storesPersonalData: false` on 14 Nov.
+  - "Data stored" and the data residency answer for in-scope End-User Data: replace with the paragraph under "Data stored" in `privacy-security.md`. It covers what the 14 Nov audit's text above covers, plus the admin who undid a reclaim, the warnings that can hold Confluence's error text and the weekly report.
+  - Scope list: the new line for `report:personal-data` is at the end of `privacy-security.md` (it shows only at submit time for the new version).
+- **Suggested release summary (62/80):** Weekly personal data report: data of closed accounts is erased
+- **Suggested release notes:** Once a week the app reports the account IDs it keeps to Atlassian, and it erases those of accounts that were closed: their rows leave the list, their History entries and protected-list entries are removed, and an admin whose account was closed shows as "Closed account" in History. Totals stay until the next scan. New permission: report personal data.
+- **Website:** the privacy page and the docs need the matching text at the next website deploy: History is kept for good except entries about closed accounts, and the weekly report and its permission.
