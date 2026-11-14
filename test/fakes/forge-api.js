@@ -31,3 +31,14 @@ const requester = (as) => {
 };
 
 export default { asApp: () => requester('app'), asUser: () => requester('user') };
+
+// privacy.reportPersonalData: the accounts of every call are kept in
+// globalThis.__reported; those listed in globalThis.__closed are answered as
+// closed.
+export const privacy = {
+  async reportPersonalData(accounts) {
+    (globalThis.__reported ??= []).push(...accounts);
+    const closed = globalThis.__closed ?? [];
+    return accounts.filter((a) => closed.includes(a.accountId)).map((a) => ({ accountId: a.accountId, status: 'closed' }));
+  },
+};

@@ -20,6 +20,7 @@ import {
   getEntry,
   getLogPage,
   getLatestFor,
+  markActionStarted,
 } from './lib/store.js';
 import {
   fetchProfiles,
@@ -288,6 +289,10 @@ define('getSeatCount', async () => ({ ok: true, at: new Date().toISOString(), ..
 define('setProtected', async ({ payload, context }) => {
   const accountId = String(payload?.accountId ?? '');
   if (!accountId) return { ok: false, error: 'No account given.' };
+  // The weekly personal data report does not erase while this may still be
+  // running (busy in lib/personal-data.js). A note that cannot be written
+  // only means the report does not wait.
+  await markActionStarted().catch(() => {});
   await setProtected(accountId, Boolean(payload?.protected), context?.accountId ?? null);
   return { ok: true };
 });
@@ -332,6 +337,8 @@ define('reclaim', async ({ payload, context }) => {
   const asked = Array.isArray(payload?.accountIds) ? payload.accountIds : [];
   const ids = [...new Set(asked.map(String))].slice(0, RECLAIM_BATCH);
   if (!ids.length) return { ok: false, error: 'No users selected.' };
+  // As for the protected list: the personal data report waits while this may be running.
+  await markActionStarted().catch(() => {});
 
   const meta = await getReportMeta();
   // A reclaim works from the list a scan produced, never from an account ID
@@ -537,6 +544,8 @@ define('reclaim', async ({ payload, context }) => {
  * to give people their access back.
  */
 define('undo', async ({ payload, context }) => {
+  // As for reclaim: the personal data report waits while this may be running.
+  await markActionStarted().catch(() => {});
   const entry = await getEntry(String(payload?.entryId ?? ''));
   if (!entry || entry.type !== 'reclaim') return { ok: false, error: 'That action was not found.' };
   if (entry.status === 'restored') return { ok: true, already: true };
@@ -573,6 +582,8 @@ async function recheckRecent(entries) {
     .filter((e) => e.type === 'reclaim' && (e.status === 'reclaimed' || e.status === 'partial') && e.seatFreed !== true)
     .filter((e) => Date.now() - Date.parse(e.updatedAt ?? e.at) < RECHECK_WINDOW_MS)
     .slice(0, RECHECK_MAX);
+  // It saves entries, so the personal data report waits while it may be running.
+  if (due.length) await markActionStarted().catch(() => {});
   for (const e of due) {
     try {
       const stillUse = await canUseConfluence(e.accountId, { asUser: true });

@@ -47,18 +47,24 @@ export async function loadServer() {
     });
     out[name] = await import(pathToFileURL(outfile).href);
   }
-  // The storage layer on its own, for tests of the log and the report.
-  const storeFile = outFile('store');
-  await build({
-    entryPoints: [path.join(root, 'src/lib/store.js')],
-    bundle: true,
-    format: 'esm',
-    platform: 'node',
-    outfile: storeFile,
-    alias: fakes,
-    logLevel: 'silent',
-  });
-  out.store = await import(pathToFileURL(storeFile).href);
+  // The storage layer on its own, for tests of the log and the report, and
+  // where the app keeps account IDs, for the personal data report.
+  for (const [name, entry] of [
+    ['store', 'src/lib/store.js'],
+    ['personal', 'src/lib/personal-data.js'],
+  ]) {
+    const outfile = outFile(name);
+    await build({
+      entryPoints: [path.join(root, entry)],
+      bundle: true,
+      format: 'esm',
+      platform: 'node',
+      outfile,
+      alias: fakes,
+      logLevel: 'silent',
+    });
+    out[name] = await import(pathToFileURL(outfile).href);
+  }
   loaded = out;
   return out;
 }
@@ -84,6 +90,9 @@ export function reset(site) {
   globalThis.__kvsFail = 0;
   globalThis.__kvsOnce = null;
   globalThis.__kvsWrites = [];
+  globalThis.__kvsSets = [];
+  globalThis.__reported = [];
+  globalThis.__closed = [];
   globalThis.__queue = [];
   globalThis.__queueFail = 0;
   globalThis.__calls = [];

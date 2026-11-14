@@ -8,7 +8,8 @@ import { kvs as forgeKvs } from '@forge/kvs';
  * itself, and the seat price. The action log and the protected list are the
  * only records a scan cannot regenerate. A log entry holds account ids, the
  * groups left (id and name) and, for a group change Confluence refused,
- * Confluence's error text.
+ * Confluence's error text. Every account ID kept here is reported to Atlassian
+ * once a week, and those of closed accounts are erased (lib/personal-data.js).
  * Display names and emails are resolved from Confluence at read time. The worst outcome of any bug
  * is a stale report — never lost customer data. That one rule removes the
  * class of failure behind the angriest reviews on the Marketplace.
@@ -239,7 +240,7 @@ export async function clearRun(run) {
 // Protected list: accounts the app must never reclaim
 // ---------------------------------------------------------------------------
 
-const PROTECTED_KEY = 'protected';
+export const PROTECTED_KEY = 'protected';
 
 export const getProtected = async () => (await kvs.get(PROTECTED_KEY)) ?? {};
 
@@ -432,6 +433,18 @@ export async function getLatestFor(accountIds) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// When a reclaim, an undo, History's re-check or a change to the protected
+// list last started. Only the time, no account: the weekly personal data
+// report does not erase while one may still be running (busy in
+// personal-data.js), since each writes from what it read a moment before.
+// ---------------------------------------------------------------------------
+
+export const ACTION_KEY = 'action:started';
+
+export const markActionStarted = () => kvs.set(ACTION_KEY, { at: new Date().toISOString() });
+export const getActionStarted = () => kvs.get(ACTION_KEY);
 
 // ---------------------------------------------------------------------------
 // Settings: the yearly price of one Confluence seat. Numbers only.
